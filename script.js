@@ -1621,36 +1621,51 @@ $("#couponInput").addEventListener("keydown", e => { if (e.key === "Enter"){ e.p
 /* Idempotency helpers — one key per checkout attempt; the SAME key is reused
    when the same checkout is submitted again (retry), so a duplicate insert is
    rejected by the DB unique index instead of creating a second order. */
-const IDEM_KEY_STORAGE = "idem_checkout_key";
-const idemGetKey = () => { try { return sessionStorage.getItem(IDEM_KEY_STORAGE); } catch { return null; } };
-const idemSetKey = k => { try { sessionStorage.setItem(IDEM_KEY_STORAGE, k); } catch {} };
-const idemClearKey = () => { try { sessionStorage.removeItem(IDEM_KEY_STORAGE); } catch {} };
-const idemNewKey = () => `idem:${crypto.randomUUID()}`;
-const idemSaveKey = k => { try { sessionStorage.setItem(IDEM_KEY_STORAGE, k); } catch {} };
-/* Verify a duplicate by calling the secure RPC (no PII): it returns the
-   matching order only when the key exists in THIS store AND the order total
-   and item lines match this purchase. It NEVER sees PII. */
-const idemVerifyOrder = async (storeId, idemKey, total, lines) => {
-  try {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_order_by_idempotency_key?p_store_id=eq.${STORE_ID}&idempotency_key=eq.${encodeURIComponent(idemKey)}`, {
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        "Content-Type": "application/json"
-      }
-    });
-    if (!r.ok) return null;
-    const rows = await r.json().catch(() => []);
-    const row = Array.isArray(rows) ? rows[0] : rows;
-    if (!row) return null;
-    const dbItems = row.items || {};
-    const dbLines = Array.isArray(dbItems) ? dbItems : (dbItems.lines || []);
-    const sameTotal = Number(row.total) === Number(total);
-    const sameLines = JSON.stringify(dbLines) === JSON.stringify(lines);
-    if (row.store_id !== STORE_ID) return null;
-    return (sameTotal && sameLines) ? row : null;
-  } catch { return null; }
-};
+/* Idempotency (staging): duplicate-order prevention. A UUID key identifies one
+   checkout attempt-set. The key is stored in sessionStorage (survives a page
+      refresh in the same tab) until the order is confirmed, then cleared. A retry
+         reuses the SAME key; a new checkout generates a NEW key. The server enforces
+            uniqueness on (store_id, idempotency_key) — a second insert with the same key
+               is rejected with HTTP 409. A 409 is NEVER treated as success on its own: the
+                  client verifies the existing order via get_order_by_idempotency_key and
+                     confirms the total AND the line items match the submitted purchase. */
+function idemKeyName(){ return "shopnest_idem_" + (STORE_ID || "default"); }
+function idemNewKey(){
+     if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+     return "idem-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10) + "-" + Math.random().toString(36).slice(2, 10);
+}
+function idemGetKey(){ try { return sessionStorage.getItem(idemKeyName()) || ""; } catch (e) { return ""; } }
+function idemSetKey(k){ try { sessionStorage.setItem(idemKeyName(), k); } catch (e) {} }
+function idemClearKey(){ try { sessionStorage.removeItem(idemKeyName()); } catch (e) {} }
+function idemLinesEqual(a, b){
+     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+     const norm = arr => arr.map(l => [l.id, l.qty, l.price, l.size || "", l.color || "", l.delivery_fee || 0].join("|")).sort().join(";");
+     return norm(a) === norm(b);
+}
+async function idemVerifyOrder(storeId, key, total, lines){
+     /* Returns the existing order if it matches this purchase (total + lines),
+          otherwise null. The RPC returns NO customer PII (id/status/total/items/
+               created_at only) and filters by BOTH store_id and key. */
+     try {
+            const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_order_by_idempotency_key`, {
+                     method: "POST",
+                     headers: {
+                                apikey: SUPABASE_ANON_KEY,
+                                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+                                "Content-Type": "application/json"
+                     },
+                     body: JSON.stringify({ p_store_id: storeId, p_key: key })
+            });
+            if (!res.ok) return null;
+            const rows = await res.json().catch(() => null);
+            const row = Array.isArray(rows) ? rows[0] : null;
+            if (!row) return null;
+            if (Number(row.total) !== Number(total)) return null;
+            const rowLines = (row.items && Array.isArray(row.items.lines)) ? row.items.lines : (Array.isArray(row.items) ? row.items : null);
+            if (!rowLines || !idemLinesEqual(rowLines, lines)) return null;
+            return row;
+     } catch (e) { return null; }
+}
 $("#checkoutForm").onsubmit = async e => {
   e.preventDefault();
   if (!checkoutState || !checkoutState.entries.length) return;
