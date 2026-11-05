@@ -1618,6 +1618,39 @@ $("#continueBtn").onclick = showHome;
 $("#couponApplyBtn").onclick = applyCoupon;
 $("#couponRemoveBtn").onclick = removeCoupon;
 $("#couponInput").addEventListener("keydown", e => { if (e.key === "Enter"){ e.preventDefault(); applyCoupon(); } });
+/* Idempotency helpers — one key per checkout attempt; the SAME key is reused
+   when the same checkout is submitted again (retry), so a duplicate insert is
+   rejected by the DB unique index instead of creating a second order. */
+const IDEM_KEY_STORAGE = "idem_checkout_key";
+const idemGetKey = () => { try { return sessionStorage.getItem(IDEM_KEY_STORAGE); } catch { return null; } };
+const idemSetKey = k => { try { sessionStorage.setItem(IDEM_KEY_STORAGE, k); } catch {} };
+const idemClearKey = () => { try { sessionStorage.removeItem(IDEM_KEY_STORAGE); } catch {} };
+const idemNewKey = () => `idem:${crypto.randomUUID()}`;
+const idemSaveKey = k => { try { sessionStorage.setItem(IDEM_KEY_STORAGE, k); } catch {} };
+/* Verify a duplicate by calling the secure RPC (no PII): it returns the
+   matching order only when the key exists in THIS store AND the order total
+   and item lines match this purchase. It NEVER sees PII. */
+const idemVerifyOrder = async (storeId, idemKey, total, lines) => {
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_order_by_idempotency_key?p_store_id=eq.${STORE_ID}&idempotency_key=eq.${encodeURIComponent(idemKey)}`, {
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        "Content-Type": "application/json"
+      }
+    });
+    if (!r.ok) return null;
+    const rows = await r.json().catch(() => []);
+    const row = Array.isArray(rows) ? rows[0] : rows;
+    if (!row) return null;
+    const dbItems = row.items || {};
+    const dbLines = Array.isArray(dbItems) ? dbItems : (dbItems.lines || []);
+    const sameTotal = Number(row.total) === Number(total);
+    const sameLines = JSON.stringify(dbLines) === JSON.stringify(lines);
+    if (row.store_id !== STORE_ID) return null;
+    return (sameTotal && sameLines) ? row : null;
+  } catch { return null; }
+};
 $("#checkoutForm").onsubmit = async e => {
   e.preventDefault();
   if (!checkoutState || !checkoutState.entries.length) return;
@@ -1656,12 +1689,16 @@ $("#checkoutForm").onsubmit = async e => {
   const items = { lines, coupon: appliedCoupon ? appliedCoupon.code : null, discount };
   if (coFields.length)
     items.custom_fields = coFields.map(cf => ({ label: cf.label, value: String(f.get("cf_" + cf.id) || "").trim() })).filter(x => x.value !== "");
+  /* Idempotency: reuse the stored key for a retry of this checkout, else a new key. */
+  let idemKey = idemGetKey();
+  if (!idemKey){ idemKey = idemNewKey(); idemSetKey(idemKey); }
   const orderRow = {
     customer_name: String(f.get("name") || "").trim(),
     phone: String(f.get("phone") || "").trim(),
     city: String(f.get("city") || "").trim(),
     address: String(f.get("address") || "").trim(),
-    items, total, status: "Pending"
+    items, total, status: "Pending",
+    idempotency_key: idemKey
   };
   if (STORE_ID) orderRow.store_id = STORE_ID;
     /* Checkout fix: anon has no SELECT policy on orders, so the insert must not
@@ -1669,18 +1706,32 @@ $("#checkoutForm").onsubmit = async e => {
           JS client's insert() has no returning option — verified in the library).
              Direct REST call with Prefer: return=minimal (proven: HTTP 201). */
    let error = null;
+   let idemDuplicate = null; /* set when a 409 is verified as the same purchase */
    try {
-      const orderRes = await fetch(`${SUPABASE_URL}/rest/v1/orders`, {
-         method: "POST",
-         headers: {
+      const idemCtrl = new AbortController();
+      const idemTimer = setTimeout(() => idemCtrl.abort(), 90000); /* 90s client timeout */
+      let orderRes;
+      try {
+        orderRes = await fetch(`${SUPABASE_URL}/rest/v1/orders`, {
+           method: "POST",
+           headers: {
             apikey: SUPABASE_ANON_KEY,
             Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
             "Content-Type": "application/json",
             Prefer: "return=minimal"
-         },
-         body: JSON.stringify(orderRow)
-      });
-      if (!orderRes.ok) error = await orderRes.json().catch(() => ({ message: "Order save failed" }));
+           },
+           body: JSON.stringify(orderRow),
+           signal: idemCtrl.signal
+        });
+      } finally { clearTimeout(idemTimer); }
+      if (orderRes.status === 409){
+        /* Duplicate key: the order may already exist. Verify it is THIS purchase
+           (total + lines) before treating it as success. Never assume 409 = success. */
+        idemDuplicate = await idemVerifyOrder(STORE_ID, idemKey, total, lines);
+        if (!idemDuplicate) error = { message: "Order verify nahi ho saka — store se rabta karein." };
+      } else if (!orderRes.ok) {
+        error = await orderRes.json().catch(() => ({ message: "Order save failed" }));
+      }
    } catch (e) { error = e; }
   btn.disabled = false; btn.innerHTML = `${icon("check", "ic-inline")} ORDER PLACE KAREIN`;
   if (error){
@@ -1688,7 +1739,10 @@ $("#checkoutForm").onsubmit = async e => {
     err.textContent = "Order save nahi ho saka — internet check karke dobara try karein.";
     return;
   }
-  metaPurchase(total, lines, String(f.get("phone") || "").trim()); /* V5 Phase 5: Meta Purchase — order save ke baad, fail-open (tracking fail ho to bhi order save rehta hai). */
+  /* On a verified duplicate (409), the order already exists — do NOT re-fire the
+     Meta Purchase event (it may already have fired on the first attempt). */
+  if (!idemDuplicate) metaPurchase(total, lines, String(f.get("phone") || "").trim()); /* V5 Phase 5: Meta Purchase — order save ke baad, fail-open (tracking fail ho to bhi order save rehta hai). */
+  idemClearKey(); /* checkout confirmed (new order or verified duplicate) — new key next time */
   if (checkoutState.source === "cart"){ cart = {}; saveCart(); renderCart(); }
   checkoutState = null;
   appliedCoupon = null;
