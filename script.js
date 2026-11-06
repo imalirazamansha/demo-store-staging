@@ -2086,7 +2086,7 @@ function showStoreError(){
     const homeLink = document.createElement("a");
     homeLink.id = "storeHomeLink";
     homeLink.className = "btn outline";
-    homeLink.href = "./";
+    homeLink.href = "https://imalirazamansha.github.io/webalibabamarketingpro/shopnest.html";
     homeLink.textContent = "Platform home";
     actions.appendChild(retryBtn);
     actions.appendChild(homeLink);
