@@ -1281,7 +1281,6 @@ async function sendMetaPurchase(orderId, token){
     metaLog({ kind: "capi-purchase", name: "Purchase", ok: !!j.ok, detail: j.already_sent ? "already_sent" : (j.events_received ? ("events_received=" + j.events_received) : (j.error || ("http " + r.status))) });
   } catch (e){ metaLog({ kind: "capi-purchase", name: "Purchase", ok: false, detail: "send fail: " + (e && e.message ? e.message : "network") }); }
 }
-}
 function metaTrack(name, params, opts){
   opts = opts || {};
   try {
@@ -1828,7 +1827,7 @@ $("#checkoutForm").onsubmit = async e => {
     return;
   }
   /* Server total wins (the RPC computed it from the canonical catalogue).
-          Meta Purchase fires AFTER the success page renders (see below, §2.6.3). */
+       Meta Purchase fires AFTER the success page renders (see below, §2.6.3). */
   const serverTotal = Number(serverOrder.total) || 0;
   const serverLines = (serverOrder.items && Array.isArray(serverOrder.items.lines)) ? serverOrder.items.lines : [];
   idemClearKey(); /* checkout confirmed (new order or verified duplicate) — new key next time */
