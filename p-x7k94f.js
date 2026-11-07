@@ -400,7 +400,8 @@ async function uploadImage(file, folder){
   const match = String(up.name || "").match(/\.([a-zA-Z0-9]+)$/);
   const ext = match ? "." + match[1].toLowerCase() : "";
   const uniqueName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`;
-  const path = `${folder}/${uniqueName}`;
+  if (!STORE_ID) throw new Error("Store load nahi hua — dobara try karein.");
+   const path = `${STORE_ID}/${folder}/${uniqueName}`;
   const { error } = await sb.storage.from("product-images").upload(path, up, { upsert: true, contentType: up.type });
   if (error) throw error;
   const { data } = sb.storage.from("product-images").getPublicUrl(path);
