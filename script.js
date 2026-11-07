@@ -1253,7 +1253,7 @@ function metaEventId(){ try { if (window.crypto && window.crypto.randomUUID) ret
 function metaFbpFbc(){ const out = {}; try { const m = document.cookie.match(/(?:^|; )_fbp=([^;]*)/); if (m) out.fbp = decodeURIComponent(m[1]); const c = document.cookie.match(/(?:^|; )_fbc=([^;]*)/); if (c) out.fbc = decodeURIComponent(c[1]); } catch (e){} return out; }
 function metaLog(entry){ try { const arr = JSON.parse(localStorage.getItem(META_LOG_KEY) || "[]"); if (!Array.isArray(arr)) throw 0; arr.unshift({ t: new Date().toISOString(), ...entry }); localStorage.setItem(META_LOG_KEY, JSON.stringify(arr.slice(0, 20))); } catch (e){} }
 function metaPixelId(){ const m = (SETTINGS && SETTINGS.meta) || {}; return String(m.pixelId || "").replace(/[^0-9]/g, ""); }
-function metaCapiOn(){ const m = (SETTINGS && SETTINGS.meta) || {}; return m.capiEnabled === true && m.hasCapiToken === true; }
+function metaCapiOn(){ const m = (SETTINGS && SETTINGS.meta) || {}; return m.capiEnabled === true; }
 async function sendCapiEvent(payload){
   try {
     const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
