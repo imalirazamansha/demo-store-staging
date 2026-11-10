@@ -960,6 +960,6 @@ body.theme-luxury .lux-sheet-row label{color:#5F594D}
 @media(max-width:900px){
   body.theme-luxury #bestGrid .card,body.theme-luxury #newGrid .card,body.theme-luxury #unstitchedGrid .card,body.theme-luxury #rtwGrid .card{min-width:calc(78% - 9px);max-width:calc(78% - 9px)}
   body.theme-luxury #bestGrid,body.theme-luxury #newGrid,body.theme-luxury #unstitchedGrid,body.theme-luxury #rtwGrid{scroll-padding-inline:12px}
-  body.theme-luxury .view-all-tile{flex:0 0 auto;min-width:calc(78% - 9px);max-width:calc(78% - 9px)}
+  body.theme-luxury .view-all-tile{flex:0 0 auto;min-width:calc(78% - 9px);max-width:calc(78% - 9px);scroll-snap-align:start}
 }
 .view-all-tile{flex:0 0 auto;min-width:220px;max-width:220px}

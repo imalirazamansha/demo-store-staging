@@ -224,9 +224,10 @@
   /* Tables: contained horizontal scroll — columns never crush or overlap.
      The old 4th-column hide rule is removed (it deleted data); tables keep
      all columns and scroll inside their card instead. */
-  #ordersWrap,#productsWrap,#categoriesWrap,#topProductsWrap,#recentOrdersWrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  #ordersWrap,#productsWrap,#categoriesWrap,#topProductsWrap,#recentOrdersWrap,#teamWrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
   #ordersWrap table,#productsWrap table,#categoriesWrap table{min-width:720px}
   #topProductsWrap table,#recentOrdersWrap table{min-width:460px}
+  #teamWrap table{min-width:560px}
   /* Header + tabs on small phones: even 2-col tab grid; Refresh no longer
      stranded on its own row by margin-left:auto. */
   @media(max-width:640px){
