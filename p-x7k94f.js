@@ -1215,7 +1215,7 @@ function renderProductsList(){
       } catch (e) { fail++; }
     }
     BULK_SELECTED.clear();
-    loadProducts(); loadCategories(); /* category counts bhi fresh hon (delete se count badalta hai) */
+    await loadProducts(); loadCategories(); /* category counts bhi fresh hon (delete se count badalta hai) — products PEHLE await karein, warna count purane cache se banta hai (J2) */
     if (fail) showToast(`${ok} products delete huin, ${fail} fail huin.` + (imgs ? ` ${imgs} images bhi Storage se delete huin (space wapas mili).` : ""), (fail && !ok) ? "err" : "info");
     else showToast(`✅ ${ok} products delete ho gayin.` + (imgs ? ` ${imgs} images bhi Storage se delete huin — space wapas mil gayi.` : ""), "ok");
   };
@@ -1226,7 +1226,7 @@ function renderProductsList(){
     try {
       const r = await deleteProductAndImages(id);
       if (EDITING_PRODUCT_ID === id) closeProductForm();
-      loadProducts(); loadCategories(); /* category counts bhi fresh hon */
+      await loadProducts(); loadCategories(); /* category counts bhi fresh hon — products PEHLE await karein (J2) */
       showToast("✅ Product delete ho gaya." + (r.images ? ` ${r.images} image${r.images > 1 ? "s" : ""} bhi Storage se delete huin — space wapas mil gayi.` : ""), "ok");
     } catch (e) { showToast("Delete fail: " + e.message, "err"); }
   });
@@ -1499,7 +1499,7 @@ function bindProdCards(wrap){
     } else {
       fileInput.value = "";
       b.textContent = "✅ Saved!";
-      loadProducts(); loadCategories(); /* category "Products" count bhi fresh ho */
+      await loadProducts(); loadCategories(); /* category "Products" count bhi fresh ho — products PEHLE await karein, warna count purane cache se banta hai (J2) */
       showToast(payload.active ? "✅ Product save ho gaya — store par live hai." : "✅ Product save ho gaya — hidden hai (store par nazar nahi aayega).", "ok");
     }
   });
@@ -1507,7 +1507,7 @@ function bindProdCards(wrap){
     if (!confirm("Yeh product delete kar dein?")) return;
     try {
       const r = await deleteProductAndImages(+b.dataset.del);
-      loadProducts(); loadCategories(); /* category counts bhi fresh hon */
+      await loadProducts(); loadCategories(); /* category counts bhi fresh hon — products PEHLE await karein (J2) */
       showToast("✅ Product delete ho gaya." + (r.images ? ` ${r.images} image${r.images > 1 ? "s" : ""} bhi Storage se delete huin — space wapas mil gayi.` : ""), "ok");
     } catch (e) { showToast("Delete fail: " + e.message, "err"); }
   });
@@ -1599,7 +1599,7 @@ async function loadCategories(){
         $("#catMsg").textContent = "✅ Category save ho gayi."; $("#catMsg").className = "msg ok";
         showToast("✅ Category save ho gayi.", "ok");
       }
-      loadCategories(); loadProducts();
+      await loadProducts(); loadCategories(); /* rename ke baad products ka cat badla — pehle products fresh karein, phir categories (count usi cache se) (J2) */
     } catch (e) { showToast("Category save fail: " + e.message, "err"); }
     b.disabled = false; b.textContent = old;
   });
@@ -1620,7 +1620,7 @@ async function loadCategories(){
     const n = Number(moved) || 0;
     $("#catMsg").textContent = `✅ Category delete ho gayi (${n} products General par move ho gaye).`; $("#catMsg").className = "msg ok";
     showToast("✅ Category delete ho gayi.", "ok");
-    loadCategories(); loadProducts();
+    await loadProducts(); loadCategories(); /* delete ke baad products General par — pehle products fresh karein, phir categories (J2) */
   });
 }
 $("#addCategoryBtn").onclick = async () => {
@@ -3567,7 +3567,7 @@ if (_impP) _impP.addEventListener("change", async () => {
     if (error){ setMsg("Import fail: " + error.message, "err"); showToast("Import fail: " + error.message, "err"); return; }
     setMsg(`✅ ${valid.length} products import ho gayin.${bad.length ? ` ${bad.length} rows chhoot gayin (rows: ${bad.slice(0, 10).join(", ")}).` : ""}`);
     showToast(`✅ ${valid.length} products import ho gayin (hidden — live karne se pehle check kar lein).`, "ok");
-    loadProducts(); loadCategories(); /* category counts bhi fresh hon */
+    await loadProducts(); loadCategories(); /* category counts bhi fresh hon — products PEHLE await karein (J2) */
   } catch (e) { setMsg("Import fail: " + e.message, "err"); showToast("Import fail: " + e.message, "err"); }
 });
 /* Low-stock: stock === 'out' wali products ki list — Products tab banner + Dashboard card. */
@@ -3673,7 +3673,16 @@ const SAVEABLE_TABS = ["settings", "homepage", "appearance", "style", "content",
 Object.entries(TAB_VIEWS).forEach(([view, [tabId]]) => {
   document.getElementById(tabId).onclick = () => switchTab(view);
 });
-function switchTab(view){
+/* Stale-counts fix (J2/J3): current tab ka data dobara load karein.
+   Await ka order ahem hai — products/orders PEHLE (cache fresh ho), phir
+   categories/dashboard (jo usi cache se count hoti hain). */
+async function refreshCurrentTab(){
+  if (!tabRefreshArmed) return;
+  if (CURRENT_TAB === "orders"){ await loadOrders(); loadDashboard(); }
+  else if (CURRENT_TAB === "categories"){ await loadProducts(); loadCategories(); }
+  else if (CURRENT_TAB === "dashboard"){ await loadOrders(); loadDashboard(); }
+}
+async function switchTab(view){
   CURRENT_TAB = view;
   Object.entries(TAB_VIEWS).forEach(([key, [tabId, panelId]]) => {
     document.getElementById(tabId).classList.toggle("active", key === view);
@@ -3684,9 +3693,12 @@ function switchTab(view){
   applyThemeVisibility();
   /* Stale-counts fix: tab khulte hi us ke data dobara load karein (storefront ya
      doosri tab se badla hua data purana na dikhe). Boot ke waqt nahi (loadAll chal raha hota hai). */
-  if (tabRefreshArmed){
-    if (view === "orders"){ loadOrders(); loadDashboard(); }
-    else if (view === "categories"){ loadProducts(); loadCategories(); }
-    else if (view === "dashboard"){ loadOrders(); loadDashboard(); }
-  }
+  await refreshCurrentTab();
 }
+/* Stale-counts fix (J3): browser tab wapas aane par bhi current tab ka data
+   dobara load karein — storefront tab par order karne ke baad admin tab par
+   aane se naya order forun nazar aaye. switchTab sirf admin ke andar ke tab
+   switch par chalta hai; browser tab switch par visibilitychange chalta hai. */
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") refreshCurrentTab();
+});
