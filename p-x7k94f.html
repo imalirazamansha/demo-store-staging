@@ -18,6 +18,10 @@
   :root{--ink:#0A2B4E;--muted:#64748b;--bg:#f4faf7;--accent:#22C55E;--accent-dark:#15803d;--line:#dce8ee;--red:#EF4444}
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+  /* No horizontal page scroll on phones — tables scroll inside their own
+     boxes; this is the safety net so no single wide element can push the
+     whole page sideways. overflow-x:clip keeps the sticky topbar working. */
+  html,body{overflow-x:hidden;overflow-x:clip}
   h1,h2,h3{font-family:'Plus Jakarta Sans',sans-serif}
   button{font-family:inherit;cursor:pointer}
   input,select,textarea{font-family:inherit;font-size:15px}
@@ -93,6 +97,9 @@
   .bar.sales{background:var(--ink)}
   .bar-lab{font-size:10.5px;color:var(--muted);white-space:nowrap}
   .tsrc-row{display:grid;grid-template-columns:104px 1fr 58px;gap:10px;align-items:center;margin:8px 0;font-size:13.5px}
+  /* Long referrer domains (no spaces) must truncate with "…" instead of
+     overflowing their 104px column and overlapping the bar. */
+  .tsrc-row span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .tsrc-track{background:#e8f2ee;border-radius:99px;height:10px;overflow:hidden}
   .tsrc-fill{background:var(--accent);height:100%;border-radius:99px}
   .tsrc-num{text-align:right;font-weight:700;font-size:12.5px}
@@ -224,10 +231,11 @@
   /* Tables: contained horizontal scroll — columns never crush or overlap.
      The old 4th-column hide rule is removed (it deleted data); tables keep
      all columns and scroll inside their card instead. */
-  #ordersWrap,#productsWrap,#categoriesWrap,#topProductsWrap,#recentOrdersWrap,#teamWrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  #ordersWrap,#productsWrap,#categoriesWrap,#topProductsWrap,#recentOrdersWrap,#teamWrap,#couponsWrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
   #ordersWrap table,#productsWrap table,#categoriesWrap table{min-width:720px}
   #topProductsWrap table,#recentOrdersWrap table{min-width:460px}
   #teamWrap table{min-width:560px}
+  #couponsWrap table{min-width:520px}
   /* Header + tabs on small phones: even 2-col tab grid; Refresh no longer
      stranded on its own row by margin-left:auto. */
   @media(max-width:640px){
