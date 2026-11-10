@@ -1512,6 +1512,8 @@ function bindProdCards(wrap){
       setUploadMsg(msg, `${files.length} image${files.length > 1 ? "s" : ""} selected — Save dabane par upload hongi.` + (files.length === 1 ? " Sirf main image badlegi." : " Yehi poori image set ban jayegi (pehli main, baaki gallery).") + (files.length > 10 ? " Sirf pehli 10 li jayengi." : ""));
     });
     renderImgOrder(card);
+    /* D2 capture-timing fix (2026-11-11): purani image set FORM KHULTE WAQT capture karein (snapshot), save ke waqt nahi — save ke waqt inputs pehle se edited hotay hain (✕ remove / typed URL), is liye save-time capture hatayi hui image ko kabhi dekh hi nahi sakta tha (f2o5y3yd orphan reh gaya tha). */
+    card.dataset.oldImgs = JSON.stringify(imgOrderList(card));
     updateDiscountWarn(card); /* F-17 warning live update. */
     card.addEventListener("input", e => {
       if (e.target.matches('[data-f="img"]') || e.target.closest('[data-gallery-wrap]')) renderImgOrder(card);
@@ -1533,10 +1535,8 @@ function bindProdCards(wrap){
     }
     updateDiscountWarn(card); /* F-17: warning hai, block nahi. */
     let imageUrl = get("img").trim();
-    /* L-19: replace se pehle purani image set capture karein (main + gallery) —
-       save kamyab hone par in mein se jo nayi set mein nahi hain, wo Storage
-       se delete hongi (removeUnsharedStorageUrls — shared guard ke saath). */
-    const oldImgUrls = [get("img").trim(), ...Array.from(card.querySelectorAll('[data-gallery-wrap] input')).map(el => el.value.trim()).filter(Boolean)];
+    /* L-19: purani image set form khulte waqt capture hui thi (bindProdCards — card.dataset.oldImgs). Save ke waqt inputs se capture karna ghalat tha: ✕ remove / typed URL ke baad inputs mein hatayi hui image hoti hi nahi, is liye safai use kabhi delete nahi karti thi. */
+    const oldImgUrls = JSON.parse(card.dataset.oldImgs || "[]");
     const oldLabel = b.textContent;
     b.disabled = true; b.textContent = files.length ? "Uploading…" : "Saving…";
     /* Is save mein upload hui URLs — save fail ho to ye kahin reference nahi
@@ -1620,6 +1620,8 @@ function bindProdCards(wrap){
           else if (cl.failed) replaceNote = " Purani image Storage se delete nahi ho saki (product save ho gaya).";
         }
       } catch (e) { replaceNote = " Purani image Storage se delete nahi ho saki (product save ho gaya)."; }
+      /* Snapshot refresh: isi khule form par dobara save ho to purani set ab NAYI set hai — warna dobara save par pehle se delete hui image dobara delete karne ki koshish hoti. */
+      card.dataset.oldImgs = JSON.stringify([payload.img, ...(Array.isArray(payload.gallery) ? payload.gallery : [])].filter(Boolean));
       showToast((payload.active ? "✅ Product save ho gaya — store par live hai." : "✅ Product save ho gaya — hidden hai (store par nazar nahi aayega).") + replaceNote, "ok");
     }
   });
