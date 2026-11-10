@@ -499,7 +499,7 @@ function showStorePicker(){
   $("#storePickerView").classList.remove("hidden");
   $("#logoutBtn").classList.remove("hidden");
   $("#pickerEmail").textContent = MY_EMAIL || "";
-  $("#pickerList").innerHTML = MY_STORES.map(s => `<button class="btn ghost store-pick" data-pick="${esc(s.id)}"><span>🏪 <strong>${esc(s.name)}</strong> <small>/${esc(s.slug)}${s.status === "suspended" ? " • ⏸ suspended" : ""}</small></span><span class="pill ${s.role ? "green" : ""}">${s.role ? esc(s.role) : "👑 platform"}</span></button>`).join("");
+  $("#pickerList").innerHTML = MY_STORES.map(s => `<button class="btn ghost store-pick" data-pick="${esc(s.id)}"><span><svg class="ic" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> <strong>${esc(s.name)}</strong> <small>/${esc(s.slug)}${s.status === "suspended" ? " • ⏸ suspended" : ""}</small></span><span class="pill ${s.role ? "green" : ""}">${s.role ? esc(s.role) : "<svg class='ic' viewBox='0 0 24 24'><circle cx='12' cy='8' r='7'/><polyline points='8.21 13.89 7 23 12 20 17 23 15.79 13.88'/></svg> platform"}</span></button>`).join("");
   $("#pickerList").querySelectorAll("[data-pick]").forEach(b => b.onclick = () => {
     const store = MY_STORES.find(s => s.id === b.dataset.pick);
     if (store) enterStore(store);
@@ -640,7 +640,7 @@ function showToast(msg, kind = "ok"){
   if (!wrap){ wrap = document.createElement("div"); wrap.id = "toastWrap"; document.body.appendChild(wrap); }
   const el = document.createElement("div");
   el.className = "toast " + (kind === "err" ? "err" : kind === "info" ? "info" : "ok");
-  const icon = kind === "err" ? "❌" : kind === "info" ? "ℹ️" : "✅";
+  const icon = kind === "err" ? '<svg class="ic" viewBox="0 0 24 24" style="width:18px;height:18px;vertical-align:-3px"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>' : kind === "info" ? '<svg class="ic" viewBox="0 0 24 24" style="width:18px;height:18px;vertical-align:-3px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>' : '<svg class="ic" viewBox="0 0 24 24" style="width:18px;height:18px;vertical-align:-3px"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
   el.innerHTML = `<span>${icon}</span><span style="flex:1">${esc(String(msg))}</span><button type="button" aria-label="Band karein">✕</button>`;
   el.querySelector("button").onclick = () => el.remove();
   wrap.appendChild(el);
@@ -951,7 +951,7 @@ $("#oeSaveBtn").onclick = async () => {
     if (!detailsChanged && !statusChanged && !finChanged){
       msg.textContent = "Koi change nahi — kuch save nahi kiya gaya.";
       msg.className = "msg";
-      btn.disabled = false; btn.textContent = "💾 Order Save karein";
+      btn.disabled = false; btn.innerHTML = `<svg class="ic" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg> Order Save karein`;
       return;
     }
     if (detailsChanged){
@@ -975,7 +975,7 @@ $("#oeSaveBtn").onclick = async () => {
     msg.textContent = "Order save fail: " + e.message; msg.className = "msg err";
     showToast("Order save fail: " + e.message, "err");
   } finally {
-    btn.disabled = false; btn.textContent = "💾 Order Save karein";
+    btn.disabled = false; btn.innerHTML = `<svg class="ic" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg> Order Save karein`;
   }
 };
 
@@ -1117,7 +1117,7 @@ function renderProductsList(){
   const pages = Math.max(1, Math.ceil(list.length / ADMIN_PAGE_SIZE));
   if (PRODUCTS_PAGE > pages) PRODUCTS_PAGE = pages;
   const pageList = list.slice((PRODUCTS_PAGE - 1) * ADMIN_PAGE_SIZE, PRODUCTS_PAGE * ADMIN_PAGE_SIZE);
-  wrap.innerHTML = `<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-weight:600;font-size:14px"><input type="checkbox" id="bulkCheckAll"> Sab select karein</label><span id="bulkCount" style="color:var(--muted);font-size:13.5px;font-weight:600"></span><button class="btn small danger" id="bulkDelBtn" type="button" disabled>🗑 Selected delete karein</button><span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-left:1.5px solid var(--line);padding-left:10px"><select id="bulkEditField" style="border:1.5px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px"><option value="">Bulk edit…</option><option value="stock-in">Stock → In Stock</option><option value="stock-out">Stock → Out of Stock</option><option value="live-on">Live → Show</option><option value="live-off">Live → Hide</option><option value="featured-on">Featured → On</option><option value="featured-off">Featured → Off</option><option value="price-up">Price → +% barhayein</option><option value="price-down">Price → -% kam karein</option></select><input id="bulkEditVal" type="number" min="1" max="90" placeholder="%" style="width:70px;border:1.5px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;display:none"><button class="btn small" id="bulkEditBtn" type="button" disabled>Apply</button></span></div><table>
+  wrap.innerHTML = `<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-weight:600;font-size:14px"><input type="checkbox" id="bulkCheckAll"> Sab select karein</label><span id="bulkCount" style="color:var(--muted);font-size:13.5px;font-weight:600"></span><button class="btn small danger" id="bulkDelBtn" type="button" disabled><svg class="ic" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Selected delete karein</button><span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-left:1.5px solid var(--line);padding-left:10px"><select id="bulkEditField" style="border:1.5px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px"><option value="">Bulk edit…</option><option value="stock-in">Stock → In Stock</option><option value="stock-out">Stock → Out of Stock</option><option value="live-on">Live → Show</option><option value="live-off">Live → Hide</option><option value="featured-on">Featured → On</option><option value="featured-off">Featured → Off</option><option value="price-up">Price → +% barhayein</option><option value="price-down">Price → -% kam karein</option></select><input id="bulkEditVal" type="number" min="1" max="90" placeholder="%" style="width:70px;border:1.5px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;display:none"><button class="btn small" id="bulkEditBtn" type="button" disabled>Apply</button></span></div><table>
     <thead><tr><th></th><th>Photo</th><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Live</th><th>Featured</th><th></th></tr></thead>
     <tbody>${pageList.map(p => `<tr>
       <td><input type="checkbox" data-bulk-check="${p.id}" ${BULK_SELECTED.has(p.id) ? "checked" : ""}></td>
@@ -1125,7 +1125,7 @@ function renderProductsList(){
       <td><strong>${esc(p.name || "")}</strong><br><small style="color:var(--muted)">#${p.id}</small></td>
       <td>${esc(p.cat || "General")}</td>
       <td><strong>${fmt(p.price)}</strong>${p.old ? `<br><small style="color:var(--muted);text-decoration:line-through">${fmt(p.old)}</small>` : ""}</td>
-      <td>${p.stock === "out" ? `<span class="pill grey">⛔ Out of Stock</span>` : `<span class="pill green">In Stock</span>`}</td>
+      <td>${p.stock === "out" ? `<span class="pill grey"><svg class="ic" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Out of Stock</span>` : `<span class="pill green">In Stock</span>`}</td>
       <td>${p.active ? `<span class="pill green">Live</span>` : `<span class="pill grey">Hidden</span>`}</td>
       <td>${p.featured ? `<span class="star-on" title="Featured">★</span>` : `<span class="star-off" title="Featured nahi">★</span>`}</td>
       <td style="white-space:nowrap"><button class="btn small" data-edit-prod="${p.id}">✎ Edit</button> <button class="btn small danger" data-del-prod="${p.id}">Delete</button></td>
@@ -1149,7 +1149,7 @@ function renderProductsList(){
     const n = BULK_SELECTED.size;
     bulkCount.textContent = n ? `${n} selected` : "";
     bulkBtn.disabled = !n;
-    bulkBtn.textContent = n ? `🗑 ${n} selected delete karein` : "🗑 Selected delete karein";
+    bulkBtn.innerHTML = n ? `<svg class="ic" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> ${n} selected delete karein` : `<svg class="ic" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Selected delete karein`;
     const boxes = [...wrap.querySelectorAll("[data-bulk-check]")];
     checkAll.checked = boxes.length > 0 && boxes.every(b => BULK_SELECTED.has(+b.dataset.bulkCheck));
     checkAll.indeterminate = boxes.some(b => BULK_SELECTED.has(+b.dataset.bulkCheck)) && !checkAll.checked;
@@ -1273,7 +1273,7 @@ function prodCard(p){
   const out = p.stock === "out";
   return `<div class="prod" data-id="${p.id}">
     <img class="img-preview" data-preview src="${safeUrl(p.img || PLACEHOLDER_IMG)}" alt="">
-    <div class="badges-row">${p.featured ? `<span class="pill green">⭐ Featured</span>` : ""}${out ? `<span class="pill grey">⛔ Out of Stock</span>` : `<span class="pill green">✅ In Stock</span>`}</div>
+    <div class="badges-row">${p.featured ? `<span class="pill green">⭐ Featured</span>` : ""}${out ? `<span class="pill grey"><svg class="ic" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Out of Stock</span>` : `<span class="pill green">✅ In Stock</span>`}</div>
     <label>Product name</label><input data-f="name" value="${esc(p.name||"")}">
     <div class="row2">
       <div><label>Price (Rs)</label><input data-f="price" type="number" value="${p.price||0}"></div>
@@ -1306,7 +1306,7 @@ function prodCard(p){
     <p class="hint">Desktop par image ko drag karke aage-peeche karein, mobile par ▲▼ buttons dabayein, phir Save karein — pehli image main hogi, baaki gallery mein swipe hongi.</p><label>Description</label><textarea data-f="desc" rows="6">${esc(p.desc||"")}</textarea>
     <p class="hint">Ye text product page par 'Product Details' mein nazar aayega — khaali line chorne se naya paragraph banta hai.</p>
     <div class="actions">
-      <button class="btn small" data-save="${p.id}">💾 Save</button>
+      <button class="btn small" data-save="${p.id}"> <svg class="ic" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg> Save</button>
       <button class="btn small danger" data-del="${p.id}">Delete</button>
     </div>
   </div>`;
@@ -2501,8 +2501,8 @@ function renderHomepage(){
       return `<div class="sec-row" data-seckey="${esc(e.key)}">
         <div class="sec-line">
           <span class="drag-handle" title="Drag karke tartib badlein">⠿</span>
-          <span class="sec-name">🧩 Custom Section<small data-cusname>${esc(c.heading || "Bina heading ke")}</small></span>
-          <label class="checkline" style="border:0;padding:2px"><input type="checkbox" data-secvis ${e.visible ? "checked" : ""}> 👁 Show</label>
+          <span class="sec-name"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg> Custom Section<small data-cusname>${esc(c.heading || "Bina heading ke")}</small></span>
+          <label class="checkline" style="border:0;padding:2px"><input type="checkbox" data-secvis ${e.visible ? "checked" : ""}> <svg class="ic" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> Show</label>
           <button class="btn small danger" type="button" data-secdel>Delete</button>
           <span class="sec-move"><button class="btn small" type="button" data-secmove="-1" title="Upar le jayein"${i === 0 ? " disabled" : ""}>↑</button><button class="btn small" type="button" data-secmove="1" title="Neeche le jayein"${i === HP_ORDER.length - 1 ? " disabled" : ""}>↓</button></span>
         </div>
@@ -2530,7 +2530,7 @@ function renderHomepage(){
       <div class="sec-line">
         <span class="drag-handle" title="Drag karke tartib badlein">⠿</span>
         <span class="sec-name">${esc(def.label)}<small>${esc(def.sub)}${off ? " — is theme par nahi dikhta" : ""}</small></span>
-        <label class="checkline" style="border:0;padding:2px"><input type="checkbox" data-secvis ${e.visible ? "checked" : ""}${off ? " disabled" : ""}> 👁 Show</label>
+        <label class="checkline" style="border:0;padding:2px"><input type="checkbox" data-secvis ${e.visible ? "checked" : ""}${off ? " disabled" : ""}> <svg class="ic" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> Show</label>
         <span class="sec-move"><button class="btn small" type="button" data-secmove="-1" title="Upar le jayein"${i === 0 ? " disabled" : ""}>↑</button><button class="btn small" type="button" data-secmove="1" title="Neeche le jayein"${i === HP_ORDER.length - 1 ? " disabled" : ""}>↓</button></span>
       </div>
     </div>`;

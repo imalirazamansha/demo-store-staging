@@ -942,3 +942,24 @@ body.theme-luxury .view-all-tile span,
 body.theme-luxury .view-all-tile small,
 body.theme-luxury .card-fabric,
 body.theme-luxury .lux-sheet-row label{color:#5F594D}
+
+
+/* ---- Responsive fixes 2026-11-10 (owner phone video, ~360px) ----
+   Storefront product cards were slim strips: 2-col grid at 360px
+   (~158px/card), Luxury swipe cards at calc(50% - 6px), and the
+   VIEW ALL tile had no width so it shrank and its text crushed.
+   Mobile now: full-width product grid, wide swipe cards (~78% so
+   the next card peeks), VIEW ALL tile fixed to card width.
+   Appended LAST so these win the cascade on equal specificity. */
+@media(max-width:520px){
+  .grid{grid-template-columns:1fr;gap:14px}
+  body.theme-luxury #hotTrack{grid-template-columns:1fr}
+  .h-track{scroll-padding-inline:12px}
+  .h-track .card{min-width:250px;max-width:250px}
+}
+@media(max-width:900px){
+  body.theme-luxury #bestGrid .card,body.theme-luxury #newGrid .card,body.theme-luxury #unstitchedGrid .card,body.theme-luxury #rtwGrid .card{min-width:calc(78% - 9px);max-width:calc(78% - 9px)}
+  body.theme-luxury #bestGrid,body.theme-luxury #newGrid,body.theme-luxury #unstitchedGrid,body.theme-luxury #rtwGrid{scroll-padding-inline:12px}
+  body.theme-luxury .view-all-tile{flex:0 0 auto;min-width:calc(78% - 9px);max-width:calc(78% - 9px)}
+}
+.view-all-tile{flex:0 0 auto;min-width:220px;max-width:220px}

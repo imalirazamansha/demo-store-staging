@@ -2026,7 +2026,7 @@ if (_trackForm) _trackForm.onsubmit = async e => {
     res.innerHTML = `<div class="track-card">
       <p><strong>Order #${oid}</strong> — <span class="pill">${escapeHtml(row.status)}</span></p>
       <p>Total: <strong>${fmt(row.total)}</strong> • Items: <strong>${row.item_count}</strong> • Date: ${escapeHtml(d)}</p>
-      ${row.tracking_note ? `<p class="track-note">📦 ${escapeHtml(row.tracking_note)}</p>` : ""}
+      ${row.tracking_note ? `<p class="track-note"><svg class="ic" aria-hidden="true"><use href="#i-package"/></svg> ${escapeHtml(row.tracking_note)}</p>` : ""}
     </div>`;
   } catch (err) {
     res.innerHTML = `<p class="form-error">Track nahi ho saka — thori der baad dobara try karein.</p>`;
