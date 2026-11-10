@@ -1063,8 +1063,10 @@ async function loadProducts(){
 let BULK_SELECTED = new Set();
 /* Product row delete + us ki (ghair-shared) images Storage se delete.
    Storage fail ho to bhi product delete hi rehta hai — sirf us image ki
-   file reh jati hai (dobara delete par phir try hogi). Kisi doosre product
-   mein lagi image kabhi delete nahi hoti (shared-image guard). */
+   file reh jati hai (dobara delete par phir try hogi). Shared-image guard
+   replace path wala hi hai (removeUnsharedStorageUrls): kisi doosre
+   product, category ya settings mein lagi image kabhi delete nahi hoti;
+   doosre store / bahar ki URL / uncertain path bhi mehfooz rehte hain. */
 async function deleteProductAndImages(id){
   const p = PRODUCTS_CACHE.find(x => x.id === id);
   const { error } = await sb.from("products").delete().eq("id", id).eq("store_id", STORE_ID);
@@ -1073,23 +1075,17 @@ async function deleteProductAndImages(id){
   const urls = [];
   if (p.img) urls.push(p.img);
   if (Array.isArray(p.gallery)) urls.push(...p.gallery);
-  const own = [];
-  for (const u of urls){
-    const i = String(u).indexOf("/product-images/");
-    if (i >= 0) own.push({ url: u, path: String(u).slice(i + "/product-images/".length).split("?")[0] });
-  }
-  if (!own.length) return { images: 0 };
-  let others = PRODUCTS_CACHE.filter(x => x.id !== id);
-  try {
-    const { data, error: qErr } = await sb.from("products").select("id,img,gallery").neq("id", id);
-    if (!qErr && Array.isArray(data)) others = data;
-  } catch (e) {}
-  const drop = own.filter(o => !others.some(x => x.img === o.url || (Array.isArray(x.gallery) && x.gallery.includes(o.url))));
-  const paths = [...new Set(drop.map(o => o.path))];
-  if (!paths.length) return { images: 0 };
-  const { error: sErr } = await sb.storage.from("product-images").remove(paths);
-  if (sErr) return { images: 0, storageWarn: true };
-  return { images: paths.length };
+  if (!urls.length) return { images: 0 };
+  /* D2-DELETE-GAP fix: delete path ab wahi shared-image guard istemal
+     karta hai jo replace path karta hai — removeUnsharedStorageUrls
+     (products + categories + settings, fail-closed, sirf apni-store
+     paths). Is se category ya settings (hero/logo) mein lagi image
+     delete nahi hoti, aur doosre store / bahar ki URL bhi mehfooz
+     rehti hai. Record pehle delete hota hai, Storage safai us ke
+     baad — delete fail ho to image barkarar rehti hai. */
+  const cl = await removeUnsharedStorageUrls(urls, []);
+  if (cl.failed) return { images: cl.removed, storageWarn: true };
+  return { images: cl.removed };
 }
 /* ---------- Replace-orphan cleanup (L-19) ---------- */
 /* Purani image URL(s) Storage se delete karein — SIRF jab wo kisi aur product
@@ -1105,8 +1101,8 @@ async function deleteProductAndImages(id){
    Sirf successful DB save ke BAAD call karein — save fail ho to purani image
    barkarar rehti hai. Storage fail non-fatal hai ({ removed: 0, failed: true })
    — product/category save phir bhi kamyab rehta hai. deleteProductAndImages
-   ko jaan-boojh kar nahi chheera (wo proven-working delete path hai); ye
-   helper usi guard logic ko replace path ke liye dobara likhta hai. */
+   ab yehi helper istemal karta hai (D2-DELETE-GAP fix) — ek hi guard,
+   dono raston par. */
 /* Storage path sirf is store ki apni (current-format) object ka hona chahiye:
    "<STORE_ID>/..." se shuru ho, ".." ya backslash na ho, aur "?" / "#" ke baad
    kuch na ho. Doosre store ka path, legacy be-ghair-prefix path
@@ -1285,21 +1281,23 @@ function renderProductsList(){
   bulkBtn.onclick = async () => {
     const ids = [...BULK_SELECTED];
     if (!ids.length) return;
-    if (!confirm(`${ids.length} products delete kar dein? Ye wapas nahi aayega — un ki images bhi Storage se delete ho jayengi (jo kisi doosre product mein lagi hon wo mehfooz rahengi).`)) return;
+    if (!confirm(`${ids.length} products delete kar dein? Ye wapas nahi aayega — un ki images bhi Storage se delete ho jayengi (jo kisi doosre product, category ya settings mein lagi hon wo mehfooz rahengi).`)) return;
     bulkBtn.disabled = true; bulkBtn.textContent = "Deleting…";
-    let ok = 0, fail = 0, imgs = 0;
+    let ok = 0, fail = 0, imgs = 0, warn = false;
     for (const id of ids){
       try {
         const r = await deleteProductAndImages(id);
         ok++; imgs += r.images;
+        if (r.storageWarn) warn = true;
         PRODUCTS_CACHE = PRODUCTS_CACHE.filter(x => x.id !== id);
         if (EDITING_PRODUCT_ID === id) closeProductForm();
       } catch (e) { fail++; }
     }
     BULK_SELECTED.clear();
     await loadProducts(); loadCategories(); /* category counts bhi fresh hon (delete se count badalta hai) — products PEHLE await karein, warna count purane cache se banta hai (J2) */
-    if (fail) showToast(`${ok} products delete huin, ${fail} fail huin.` + (imgs ? ` ${imgs} images bhi Storage se delete huin (space wapas mili).` : ""), (fail && !ok) ? "err" : "info");
-    else showToast(`✅ ${ok} products delete ho gayin.` + (imgs ? ` ${imgs} images bhi Storage se delete huin — space wapas mil gayi.` : ""), "ok");
+    const warnNote = warn ? " Kuch images Storage se delete nahi ho sakin." : "";
+    if (fail) showToast(`${ok} products delete huin, ${fail} fail huin.` + (imgs ? ` ${imgs} images bhi Storage se delete huin (space wapas mili).` : "") + warnNote, (fail && !ok) ? "err" : "info");
+    else showToast(`✅ ${ok} products delete ho gayin.` + (imgs ? ` ${imgs} images bhi Storage se delete huin — space wapas mil gayi.` : "") + warnNote, "ok");
   };
   syncBulk();
   wrap.querySelectorAll("[data-del-prod]").forEach(b => b.onclick = async () => {
@@ -1309,7 +1307,7 @@ function renderProductsList(){
       const r = await deleteProductAndImages(id);
       if (EDITING_PRODUCT_ID === id) closeProductForm();
       await loadProducts(); loadCategories(); /* category counts bhi fresh hon — products PEHLE await karein (J2) */
-      showToast("✅ Product delete ho gaya." + (r.images ? ` ${r.images} image${r.images > 1 ? "s" : ""} bhi Storage se delete huin — space wapas mil gayi.` : ""), "ok");
+      showToast("✅ Product delete ho gaya." + (r.images ? ` ${r.images} image${r.images > 1 ? "s" : ""} bhi Storage se delete huin — space wapas mil gayi.` : "") + (r.storageWarn ? " Kuch images Storage se delete nahi ho sakin." : ""), "ok");
     } catch (e) { showToast("Delete fail: " + e.message, "err"); }
   });
   renderProductsPager(list.length);
@@ -1630,7 +1628,7 @@ function bindProdCards(wrap){
     try {
       const r = await deleteProductAndImages(+b.dataset.del);
       await loadProducts(); loadCategories(); /* category counts bhi fresh hon — products PEHLE await karein (J2) */
-      showToast("✅ Product delete ho gaya." + (r.images ? ` ${r.images} image${r.images > 1 ? "s" : ""} bhi Storage se delete huin — space wapas mil gayi.` : ""), "ok");
+      showToast("✅ Product delete ho gaya." + (r.images ? ` ${r.images} image${r.images > 1 ? "s" : ""} bhi Storage se delete huin — space wapas mil gayi.` : "") + (r.storageWarn ? " Kuch images Storage se delete nahi ho sakin." : ""), "ok");
     } catch (e) { showToast("Delete fail: " + e.message, "err"); }
   });
 }
