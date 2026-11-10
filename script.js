@@ -206,7 +206,7 @@ let SETTINGS = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
 const PLATFORM_HOSTS = ["localhost", "127.0.0.1", "imalirazamansha.github.io"];
 let STORE = null;
 let STORE_ID = null;
-let STORE_SLUG = "shopnest";
+let STORE_SLUG = "test-store-a";
 
 let PRODUCTS = [];
 let CATEGORIES = []; /* categories table ki rows (name/image/visible/sort); fail ho to [] = products se derive */
@@ -2213,7 +2213,7 @@ function startSocialProof(){
      2) sessionStorage 'sn_store_slug' (pehle visit se yaad)
      3) custom domain: hostname platform ke apne hosts se alag ho to
         storefront_stores mein custom_domain match
-     4) default 'shopnest'
+     4) default 'test-store-a'
    Stores lookup hi fail ho jaye to FAIL-CLOSED (Module 4): kuch load nahi
    hota, "Store load nahi ho saka" + Retry dikhta hai — kabhi baghair store
    filter ke purana render nahi hota. */
@@ -2261,7 +2261,7 @@ async function resolveStore(){
         } catch (e) { preRow = null; /* RPC fail — default/fallback neeche sambhal lega */ }
       }
     }
-    if (!slug) slug = "shopnest";
+    if (!slug) slug = "test-store-a";
   }
   STORE_SLUG = slug;
   /* F-19: custom-domain boot pehle hi resolve ho chuka ho to dobara RPC nahi. */
@@ -2277,11 +2277,11 @@ async function resolveStore(){
   }
   if (!row){
     if (explicit) return "notfound";
-    if (slug !== "shopnest"){
+    if (slug !== "test-store-a"){
       /* Session ka purana slug ab mojood nahi — saaf karke default try karein. */
       try { sessionStorage.removeItem("sn_store_slug"); } catch (e) {}
-      STORE_SLUG = "shopnest";
-      try { row = await fetchStorefrontRow("shopnest"); } catch (e) { row = null; }
+      STORE_SLUG = "test-store-a";
+      try { row = await fetchStorefrontRow("test-store-a"); } catch (e) { row = null; }
       if (!row){ STORE = null; STORE_ID = null; return "fallback"; }
     } else {
       /* View hai lekin default store bhi nahi — purana single-tenant render. */
@@ -2344,6 +2344,8 @@ async function retryBoot(){
   const box = $("#storeNotice");
   if (box) box.hidden = true;
   document.body.classList.remove("store-closed");
+  /* Stale session slug saaf karein — warna retry wahi purani slug se fail hota hai. */
+  try { sessionStorage.removeItem("sn_store_slug"); } catch (e) {}
   PRODUCTS = [];
   CATEGORIES = [];
   STORE = null;

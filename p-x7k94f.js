@@ -109,7 +109,9 @@ let CATEGORIES_CACHE = [];
 let heroState = [];
 /* ---------- V2 state ---------- */
 let CURRENT_TAB = "dashboard";
+let tabRefreshArmed = false; /* switchTab refresh sirf boot ke baad (loadAll ke baad true hota hai). */
 let SETTINGS_STATE = null;   // loadSettings ke baad full merged settings (saare tabs isi se bharte/save hote hain)
+let metaDirty = false;   // Stale-save guard: Meta tab ke fields is session mein chhooe gaye ya nahi (persistAllSettings is se meta ko dirty-gate karta hai).
 let EDITING_PRODUCT_ID = null;
 let HP_ORDER = []; let HP_LUX_WARN = []; // Is theme par render na hone wali sections ki list (grey rows) — builder se koi key nahi hat-ti           // homepage builder: [{key, visible}] — custom entries key "custom:<id>"
 let HP_CUSTOM = {};          // custom sections content: id -> {heading, text, img, btn_label, btn_link}
@@ -549,6 +551,7 @@ async function loadAll(){
   if (isAdminPlus()) loadDomain();
   loadCoupons();
   if (effRole() === "owner" || effRole() === "admin") loadTeam();
+  tabRefreshArmed = true; /* boot ho gaya — ab tab switch par refresh chalega. */
 }
 
 /* ---------- Image upload (Supabase Storage: product-images) ---------- */
@@ -702,6 +705,7 @@ function renderOrderStats(){
    wapas unpaid sirf owner/admin kar sakta hai (staff ka checkbox disabled). */
 function paymentCellHtml(o){
   if (!hasPaymentField(o)) return "—";
+  if (isDeletedOrder(o)) return "—"; /* soft-deleted order ka payment nahi badalte — RPC deleted_at check nahi karta */
   if (o.status !== "Delivered") return isPaidOrder(o) ? "✅ Paid" : "—";
   const paid = isPaidOrder(o);
   const lock = paid && effRole() === "staff";
@@ -786,15 +790,22 @@ function renderOrders(){
     }
   });
   wrap.querySelectorAll("[data-pay]").forEach(cb => cb.onchange = async () => {
-    /* L-4: payment_status update — server par dedicated RPC abhi nahi, is
-       liye REST update try karte hain; fail ho to saaf error (staff ke liye
-       RLS owner/admin-only hai). */
+    /* L-4 / DEC-15: payment_status — purpose-built RPC mark_payment_status (migration 07).
+       Server enforces: Delivered required to mark paid; staff may mark paid; only owner/admin
+       may reverse. Direct REST update is revoked (Module 3b) — never use it here. */
     const id = +cb.dataset.pay;
     const paid = cb.checked;
-    const { error } = await sb.from("orders").update({ payment_status: paid ? "paid" : "unpaid" }).eq("id", id).eq("store_id", STORE_ID);
-    if (error){ cb.checked = !paid; showToast("Payment status save nahi ho saka: " + error.message, "err"); return; }
+    cb.disabled = true; /* double-click / duplicate request rokein */
+    const { data: ok, error } = await sb.rpc("mark_payment_status", { p_order_id: id, p_collected: paid });
+    if (error || ok !== true){
+      cb.checked = !paid; /* persisted state wapis (RPC ne kuch nahi badla) */
+      cb.disabled = false;
+      showToast("Payment status save nahi ho saka: " + (error ? error.message : "server ne confirm nahi kiya"), "err");
+      return;
+    }
     const row = ORDERS_CACHE.find(x => x.id === id); if (row) row.payment_status = paid ? "paid" : "unpaid";
     showToast(paid ? "✅ Cash mil gaya — payment paid mark ho gaya." : "Payment wapas unpaid kar diya gaya.", "ok");
+    cb.disabled = false;
     await loadOrders(); loadDashboard();
   });
   wrap.querySelectorAll("[data-restore-order]").forEach(b => b.onclick = async () => {
@@ -1204,7 +1215,7 @@ function renderProductsList(){
       } catch (e) { fail++; }
     }
     BULK_SELECTED.clear();
-    loadProducts();
+    loadProducts(); loadCategories(); /* category counts bhi fresh hon (delete se count badalta hai) */
     if (fail) showToast(`${ok} products delete huin, ${fail} fail huin.` + (imgs ? ` ${imgs} images bhi Storage se delete huin (space wapas mili).` : ""), (fail && !ok) ? "err" : "info");
     else showToast(`✅ ${ok} products delete ho gayin.` + (imgs ? ` ${imgs} images bhi Storage se delete huin — space wapas mil gayi.` : ""), "ok");
   };
@@ -1215,7 +1226,7 @@ function renderProductsList(){
     try {
       const r = await deleteProductAndImages(id);
       if (EDITING_PRODUCT_ID === id) closeProductForm();
-      loadProducts();
+      loadProducts(); loadCategories(); /* category counts bhi fresh hon */
       showToast("✅ Product delete ho gaya." + (r.images ? ` ${r.images} image${r.images > 1 ? "s" : ""} bhi Storage se delete huin — space wapas mil gayi.` : ""), "ok");
     } catch (e) { showToast("Delete fail: " + e.message, "err"); }
   });
@@ -1488,15 +1499,15 @@ function bindProdCards(wrap){
     } else {
       fileInput.value = "";
       b.textContent = "✅ Saved!";
-      loadProducts();
-      showToast("✅ Product save ho gaya — store par live hai.", "ok");
+      loadProducts(); loadCategories(); /* category "Products" count bhi fresh ho */
+      showToast(payload.active ? "✅ Product save ho gaya — store par live hai." : "✅ Product save ho gaya — hidden hai (store par nazar nahi aayega).", "ok");
     }
   });
   wrap.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
     if (!confirm("Yeh product delete kar dein?")) return;
     try {
       const r = await deleteProductAndImages(+b.dataset.del);
-      loadProducts();
+      loadProducts(); loadCategories(); /* category counts bhi fresh hon */
       showToast("✅ Product delete ho gaya." + (r.images ? ` ${r.images} image${r.images > 1 ? "s" : ""} bhi Storage se delete huin — space wapas mil gayi.` : ""), "ok");
     } catch (e) { showToast("Delete fail: " + e.message, "err"); }
   });
@@ -1508,7 +1519,7 @@ $("#addProductBtn").onclick = async () => {
   }).select("id").single();
   if (error) showToast("Add fail: " + error.message, "err");
   else {
-    await loadProducts();
+    await loadProducts(); loadCategories(); /* naya product "General" mein hai — us ki count bhi fresh ho */
     if (data && data.id) openProductForm(data.id);
     showToast("Naya product ban gaya hai (abhi hidden hai) — form mein details aur image bhar kar, 'Show on store' = Yes karke Save karein.", "info");
   }
@@ -1545,9 +1556,12 @@ async function loadCategories(){
     const id = +b.dataset.csave;
     const name = tr.querySelector("[data-cname]").value.trim();
     if (!name){ showToast("Category ka naam khaali nahi ho sakta.", "err"); return; }
-    /* HQ-A-02 (DEC-10): rename products.cat ko bhi cascade karta hai. */
+    /* HQ-A-02 (DEC-10): rename products.cat ko bhi cascade karta hai — atomic RPC
+       rename_category (migration 18) se. RPC 'General' ka rename protect nahi karta,
+       is liye UI pehle se rokta hai. */
     const oldCat = (CATEGORIES_CACHE.find(c => c.id === id) || {}).name || "";
     const renamed = oldCat && oldCat !== name;
+    if (renamed && oldCat === "General"){ showToast("General category ka naam nahi badal sakte.", "err"); return; }
     const affected = renamed ? PRODUCTS_CACHE.filter(p => p.cat === oldCat).length : 0;
     if (renamed && affected > 0){
       if (!confirm(`${affected} products is category mein hain — rename karne se un ka category bhi badal jayega?`)) return;
@@ -1557,19 +1571,30 @@ async function loadCategories(){
     const old = b.textContent; b.disabled = true; b.textContent = "Saving…";
     try {
       if (file) image = await uploadImage(file, "categories");
-      const { error } = await sb.from("categories").update({ name, image, sort: parseInt(tr.querySelector("[data-csort]").value) || 0 }).eq("id", id).eq("store_id", STORE_ID);
-      if (error) throw error;
-      if (renamed && affected > 0){
-        const { error: pErr } = await sb.from("products").update({ cat: name }).eq("store_id", STORE_ID).eq("cat", oldCat);
-        if (pErr){
-          $("#catMsg").textContent = `Category rename ho gayi, lekin ${affected} products move nahi hue: ` + pErr.message;
-          $("#catMsg").className = "msg err";
-          showToast("Category rename ho gayi, lekin products move nahi hue: " + pErr.message, "err");
-        } else {
-          $("#catMsg").textContent = `✅ Category save ho gayi — ${affected} products updated.`;
-          $("#catMsg").className = "msg ok";
-          showToast(`✅ Category save ho gayi — ${affected} products updated.`, "ok");
+      /* Naam badla ho to pehle atomic rename RPC (cascade samet) — is ke baghair
+         image/sort save nahi karte, taa ke aadha save na ho. */
+      let moved = 0;
+      if (renamed){
+        const { data: movedCount, error: rErr } = await sb.rpc("rename_category", { p_store_id: STORE_ID, p_old_name: oldCat, p_new_name: name });
+        if (rErr){
+          const m = String(rErr.message || "");
+          if (/duplicate|unique/i.test(m)) throw new Error("Is naam ki category pehle se maujood hai.");
+          throw rErr;
         }
+        moved = Number(movedCount) || 0;
+      }
+      /* Image/sort sirf is row ki hain — direct update mehfooz hai (koi cascade nahi). */
+      const { error } = await sb.from("categories").update({ image, sort: parseInt(tr.querySelector("[data-csort]").value) || 0 }).eq("id", id).eq("store_id", STORE_ID);
+      if (error){
+        if (renamed){
+          $("#catMsg").textContent = `Category rename ho gayi (${moved} products updated), lekin image/sort save nahi hui: ` + error.message;
+          $("#catMsg").className = "msg err";
+          showToast("Category rename ho gayi, lekin image/sort save nahi hui: " + error.message, "err");
+        } else throw error;
+      } else if (renamed){
+        $("#catMsg").textContent = `✅ Category save ho gayi — ${moved} products updated.`;
+        $("#catMsg").className = "msg ok";
+        showToast(`✅ Category save ho gayi — ${moved} products updated.`, "ok");
       } else {
         $("#catMsg").textContent = "✅ Category save ho gayi."; $("#catMsg").className = "msg ok";
         showToast("✅ Category save ho gayi.", "ok");
@@ -1581,17 +1606,21 @@ async function loadCategories(){
   wrap.querySelectorAll("[data-cdel]").forEach(b => b.onclick = async () => {
     const id = +b.dataset.cdel;
     const catName = (CATEGORIES_CACHE.find(c => c.id === id) || {}).name || "";
+    if (catName === "General"){ showToast("General category delete nahi ho sakti.", "err"); return; }
     const affected = catName ? PRODUCTS_CACHE.filter(p => p.cat === catName).length : 0;
     if (!confirm(`Yeh category delete kar dein?\n\nNote: is category ke PRODUCTS delete NAHI honge — ${affected} product ki category "General" kar di jayegi, aur category nav/tiles/footer se gayab hogi.`)) return;
-    /* HQ-A-02 (DEC-10): pehle products General par, phir category delete —
-       taa ke beech mein fail ho to koi orphan category text na bane. */
-    if (affected > 0){
-      const { error: pErr } = await sb.from("products").update({ cat: "General" }).eq("store_id", STORE_ID).eq("cat", catName);
-      if (pErr){ showToast("Category delete nahi hui — products General par move nahi ho sake: " + pErr.message, "err"); return; }
+    /* HQ-A-02 (DEC-10): atomic RPC delete_category_reassign (migration 18) — pehle
+       products General par, phir category delete, aik transaction mein. */
+    const { data: moved, error } = await sb.rpc("delete_category_reassign", { p_store_id: STORE_ID, p_name: catName });
+    if (error){
+      const msg = /General/i.test(error.message) ? "General category delete nahi ho sakti." : error.message;
+      showToast("Delete fail: " + msg, "err");
+      return;
     }
-    const { error } = await sb.from("categories").delete().eq("id", id).eq("store_id", STORE_ID);
-    if (error) showToast("Delete fail: " + error.message, "err");
-    else { $("#catMsg").textContent = `✅ Category delete ho gayi (${affected} products General par move ho gaye).`; $("#catMsg").className = "msg ok"; showToast("✅ Category delete ho gayi.", "ok"); loadCategories(); loadProducts(); }
+    const n = Number(moved) || 0;
+    $("#catMsg").textContent = `✅ Category delete ho gayi (${n} products General par move ho gaye).`; $("#catMsg").className = "msg ok";
+    showToast("✅ Category delete ho gayi.", "ok");
+    loadCategories(); loadProducts();
   });
 }
 $("#addCategoryBtn").onclick = async () => {
@@ -3199,6 +3228,17 @@ function bindMetaTab(){
   const tb = $("#metaTestPixelBtn"); if (tb) tb.onclick = metaTestPixel;
   const cl = $("#metaClearLogBtn"); if (cl) cl.onclick = () => { try { localStorage.removeItem("sn_meta_log_v1"); } catch (e){} metaRenderLog(); };
   const tg = $("#metaTokenToggle"); if (tg) tg.onclick = () => { const tok = $("#metaCapiToken"); if (!tok) return; tok.type = tok.type === "password" ? "text" : "password"; tg.textContent = tok.type === "password" ? "👁 dikhayein" : "🙈 chhupayein"; };
+  /* Stale-save guard: Meta tab ke fields chhooey jayein to hi metaDirty — warna
+     persistAllSettings meta/customCode payload se hata dega aur RPC ka top-level
+     merge stored meta ko mehfooz rakhega (capiEnabled overwrite nahi hota).
+     Programmatic fill (fillMeta) input/change events nahi chalata, is liye ye
+     sirf asal user edits par set hota hai. */
+  ["metaPixelId", "metaCapiEnabled", "metaTestEventCode", "metaCapiToken", "metaCapiDelete", "metaCodeHead", "metaCodeBody"].forEach(fid => {
+    const el = document.getElementById(fid);
+    if (!el) return;
+    el.addEventListener("input", () => { metaDirty = true; });
+    el.addEventListener("change", () => { metaDirty = true; });
+  });
 }
 async function persistAllSettings(){
   /* HQ-A-03: load fail / load pending ho to save se inkaar — defaults se
@@ -3353,6 +3393,10 @@ async function persistAllSettings(){
        Owner/Admin-only policy par band hai). */
     const savePayload = JSON.parse(JSON.stringify(data));
     if (effRole() === "staff"){ delete savePayload.meta; delete savePayload.customCode; }
+    /* Stale-save guard: Meta tab is session mein chhooa hi nahi gaya to meta/customCode
+       payload se hata dein — RPC ka top-level merge (v_stored || v_in) phir stored meta
+       ko bilkul waisa ka waisa rakhta hai, chahe page kitna bhi purana ho. */
+    if (!metaDirty){ delete savePayload.meta; delete savePayload.customCode; }
     const { data: saved, error } = await sb.rpc("update_store_settings", { p_store_id: STORE_ID, p_data: savePayload });
     if (error) throw error;
     /* HQ-A-09: settings save ho gayin — AB token save karein, apni try/catch
@@ -3373,7 +3417,7 @@ async function persistAllSettings(){
         tokenSaveError = tokErr;
       }
     }
-    SETTINGS_STATE = saved || data; /* (A) Luxury auto-seed — theme save ho gaya, ab categories (agar khaali hon). Seed apni ghalti khud pakarta hai (toast) — save is se fail nahi hota. */ await seedLuxuryCategories(data);
+    SETTINGS_STATE = saved || data; metaDirty = false; /* save ke baad snapshot fresh hai — agla save dobara sirf chhooe gaye Meta par likhega. */ /* (A) Luxury auto-seed — theme save ho gaya, ab categories (agar khaali hon). Seed apni ghalti khud pakarta hai (toast) — save is se fail nahi hota. */ await seedLuxuryCategories(data);
     renderHeroEditor();
 /* V4 Phase 2: theme badla ho to Content/builder/Style dobara dikhayein. */
 applyThemeVisibility();
@@ -3523,7 +3567,7 @@ if (_impP) _impP.addEventListener("change", async () => {
     if (error){ setMsg("Import fail: " + error.message, "err"); showToast("Import fail: " + error.message, "err"); return; }
     setMsg(`✅ ${valid.length} products import ho gayin.${bad.length ? ` ${bad.length} rows chhoot gayin (rows: ${bad.slice(0, 10).join(", ")}).` : ""}`);
     showToast(`✅ ${valid.length} products import ho gayin (hidden — live karne se pehle check kar lein).`, "ok");
-    loadProducts();
+    loadProducts(); loadCategories(); /* category counts bhi fresh hon */
   } catch (e) { setMsg("Import fail: " + e.message, "err"); showToast("Import fail: " + e.message, "err"); }
 });
 /* Low-stock: stock === 'out' wali products ki list — Products tab banner + Dashboard card. */
@@ -3638,4 +3682,11 @@ function switchTab(view){
   $("#globalSaveBtn").classList.toggle("hidden", !SAVEABLE_TABS.includes(view));
   /* V4 Phase 2: tab khulte hi active theme ke controls dobara lagayein. */
   applyThemeVisibility();
+  /* Stale-counts fix: tab khulte hi us ke data dobara load karein (storefront ya
+     doosri tab se badla hua data purana na dikhe). Boot ke waqt nahi (loadAll chal raha hota hai). */
+  if (tabRefreshArmed){
+    if (view === "orders"){ loadOrders(); loadDashboard(); }
+    else if (view === "categories"){ loadProducts(); loadCategories(); }
+    else if (view === "dashboard"){ loadOrders(); loadDashboard(); }
+  }
 }

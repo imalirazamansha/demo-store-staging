@@ -1101,7 +1101,8 @@ function slugify(name){
 }
 let slugAuto = true;
 $("#csName").addEventListener("input", () => { if (slugAuto) $("#csSlug").value = slugify($("#csName").value); });
-$("#csSlug").addEventListener("input", () => { slugAuto = false; $("#csSlug").value = slugify($("#csSlug").value); });
+$("#csSlug").addEventListener("input", () => { slugAuto = false; });
+$("#csSlug").addEventListener("blur", () => { $("#csSlug").value = slugify($("#csSlug").value); });
 document.querySelectorAll('input[name="csMode"]').forEach(r => r.addEventListener("change", () => {
   const tpl = document.querySelector('input[name="csMode"]:checked').value === "template";
   $("#csTemplateOpts").classList.toggle("hidden", !tpl);
@@ -1203,6 +1204,9 @@ $("#csCreateBtn").onclick = async () => {
       const { data: srcSettings } = await sb.from("settings").select("data").eq("store_id", srcId).maybeSingle();
       const newData = JSON.parse(JSON.stringify((srcSettings && srcSettings.data) || {}));
               newData.store_name = name;         /* (C) Wart fix: template copy shopnest ki pehchan bhi copy kar deta tha —            nayi store ko shopnest ka WhatsApp / logo / socials / theme colour mil            jata tha. Inhein khaali kar dein (theme, sections_order, Luxury keys            copy hone dein — wahi maqsad hai). */         newData.whatsapp_number = "";         newData.logo_url = "";         newData.socials = { facebook: "", instagram: "", tiktok: "", youtube: "", x: "", whatsapp: ""};         newData.theme_color = "";         /* HQ-A-15 (theme copy wala hi usool): source ka Instagram handle bhi            nayi store par nahi jana chahiye — target ka apna handle (ya khaali)            rahega. */         newData.instaHandle = "";         /* Profile fallback bhi reset: storefront logo profile.logo_url se aur            WhatsApp float profile.phone se bhi parhta hai — sirf top-level keys            khaali karne se shopnest ka number phir bhi leak hota. */         if (newData.profile) { newData.profile.logo_url = ""; newData.profile.phone = "";}
+         /* Stale-save / leak fix: source store ki Meta config (Pixel/CAPI/test code) aur
+            custom code nayi store par nahi jani chahiye — nayi store ki apni Meta hogi. */
+         delete newData.meta; delete newData.customCode;
       const { error: e4 } = await sb.from("settings").upsert({ store_id: sid, data: newData }, { onConflict: "store_id" });
       if (e4) throw new Error("Settings copy: " + e4.message);
               steps.push("✅ Settings copy ho gayein (store name naya wala)");         steps.push("✅ ShopNest identity reset — WhatsApp/logo/socials/theme colour khaali (nayi store ki apni pehchan hogi)");
