@@ -1385,7 +1385,7 @@ function prodCard(p){
     <label>Ya image URL paste karein</label><input data-f="img" value="${esc(p.img||"")}" placeholder="https://…">
     <label>🖼️ Extra images (card par swipe hongi — V3.6 gallery)</label><div data-gallery-wrap>${galleryInputs(p)}</div><p class="hint">Extra image ho to product card par image swipe hogi (dots + auto-rotate) — FunBug ke bestseller cards ki tarah. Khaali chor dein to sirf main image dikhegi.</p>
     <label>↕️ Images ki tartib (pehli = main)</label><div class="img-order" data-img-order style="display:flex;gap:8px;flex-wrap:wrap"></div>
-    <p class="hint">Desktop par image ko drag karke aage-peeche karein, mobile par ▲▼ buttons dabayein, phir Save karein — pehli image main hogi, baaki gallery mein swipe hongi.</p><label>Description</label><textarea data-f="desc" rows="6">${esc(p.desc||"")}</textarea>
+    <p class="hint">Desktop par image ko drag karke aage-peeche karein, mobile par ▲▼ buttons dabayein; kisi image ko hatane ke liye us par ✕ dabayein — Save par pakki hogi (Storage se bhi delete ho jayegi). Pehli image main hogi, baaki gallery mein swipe hongi.</p><label>Description</label><textarea data-f="desc" rows="6">${esc(p.desc||"")}</textarea>
     <p class="hint">Ye text product page par 'Product Details' mein nazar aayega — khaali line chorne se naya paragraph banta hai.</p>
     <div class="actions">
       <button class="btn small" data-save="${p.id}"> <svg class="ic" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg> Save</button>
@@ -1430,7 +1430,7 @@ function renderImgOrder(card){
   const arr = imgOrderList(card);
   if (!arr.length){ strip.innerHTML = '<span class="hint">Koi image nahi — pehle image upload karein ya URL paste karein.</span>'; return; }
   let dragIdx = -1;
-  strip.innerHTML = arr.map((u, i) => `<div draggable="true" data-idx="${i}" style="position:relative;border:2px solid #ddd;border-radius:8px;overflow:hidden;width:64px;height:64px;cursor:grab;flex:0 0 auto" title="Image ${i+1}${i===0 ? " (main)" : ""}"><img src="${safeUrl(u)}" draggable="false" style="width:100%;height:100%;object-fit:cover;display:block"><span style="position:absolute;top:0;left:0;background:#000a;color:#fff;font-size:11px;padding:1px 5px;border-radius:0 0 6px 0">${i+1}</span><span style="position:absolute;bottom:0;right:0;display:flex"><button type="button" data-move="-1" title="Ek pehle" style="background:#000a;color:#fff;border:0;padding:4px 7px;font-size:14px;line-height:1">▲</button><button type="button" data-move="1" title="Ek baad mein" style="background:#000a;color:#fff;border:0;padding:4px 7px;font-size:14px;line-height:1">▼</button></span></div>`).join("");
+  strip.innerHTML = arr.map((u, i) => `<div draggable="true" data-idx="${i}" style="position:relative;border:2px solid #ddd;border-radius:8px;overflow:hidden;width:64px;height:64px;cursor:grab;flex:0 0 auto" title="Image ${i+1}${i===0 ? " (main)" : ""}"><img src="${safeUrl(u)}" draggable="false" style="width:100%;height:100%;object-fit:cover;display:block"><span style="position:absolute;top:0;left:0;background:#000a;color:#fff;font-size:11px;padding:1px 5px;border-radius:0 0 6px 0">${i+1}</span><button type="button" data-remove="${i}" title="Ye image hatayein" style="position:absolute;top:0;right:0;background:#b91c1c;color:#fff;border:0;width:20px;height:20px;font-size:12px;line-height:1;border-radius:0 0 0 6px;cursor:pointer">✕</button><span style="position:absolute;bottom:0;right:0;display:flex"><button type="button" data-move="-1" title="Ek pehle" style="background:#000a;color:#fff;border:0;padding:4px 7px;font-size:14px;line-height:1">▲</button><button type="button" data-move="1" title="Ek baad mein" style="background:#000a;color:#fff;border:0;padding:4px 7px;font-size:14px;line-height:1">▼</button></span></div>`).join("");
   strip.querySelectorAll('[data-idx]').forEach(box => {
     box.addEventListener('dragstart', e => { dragIdx = +box.dataset.idx; try { e.dataTransfer.setData('text/plain', String(dragIdx)); } catch (err) {} });
     box.addEventListener('dragover', e => e.preventDefault());
@@ -1455,6 +1455,19 @@ function renderImgOrder(card){
       const j = i + d;
       if (j < 0 || j >= a.length) return;
       [a[i], a[j]] = [a[j], a[i]];
+      writeImgOrder(card, a);
+      renderImgOrder(card);
+    });
+  });
+  /* Per-image remove: kisi bhi maujooda image par ✕ — poora product delete kiye baghair. Hatayi hui image Save par inputs se nikal jati hai; purani-image safai (D2) use Storage se bhi delete kar deti hai agar kahin aur use nahi ho rahi. Aakhri image block hai (product be-tasveer na rahe). */
+  strip.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const box = btn.closest('[data-idx]');
+      const i = +box.dataset.idx;
+      const a = imgOrderList(card);
+      if (a.length <= 1){ showToast("Aakhri image nahi hatayi ja sakti — pehle nayi image add karein.", "err"); return; }
+      if (!confirm("Ye image hatayein? Save karne par ye Storage se bhi delete ho jayegi (agar kahin aur use nahi ho rahi).")) return;
+      a.splice(i, 1);
       writeImgOrder(card, a);
       renderImgOrder(card);
     });

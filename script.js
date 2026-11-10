@@ -1425,10 +1425,13 @@ function openProduct(id){
   pdpId = id; pdpQty = 1;
   $("#pdpImg").src = imgSrc(p.img || ""); $("#pdpImg").alt = p.name;
   $("#pdpThumb").src = imgSrc(p.img || ""); $("#pdpThumb").alt = p.name;
-  /* V3.12: PDP thumbnails products.gallery se (pehli #pdpThumb rehti hai — lightbox binding barkarar). */
+  /* V3.12: PDP thumbnails products.gallery se. TAMAM thumbnails (pehli #pdpThumb bhi) click par MAIN image badalti hain — lightbox sirf main image (#pdpImg) ke click par khulta hai. */
   const galImgs = [String(p.img || "").trim(), ...galleryOf(p)].filter(Boolean);
   const thumbsBox = document.querySelector(".pdp-thumbs");
-  if (thumbsBox){ thumbsBox.querySelectorAll("[data-gal-thumb]").forEach(x => x.remove()); galImgs.slice(1).forEach(u => { const im = document.createElement("img"); im.src = safeUrl(u); im.alt = ""; im.dataset.galThumb = "1"; im.onclick = () => { $("#pdpImg").src = safeUrl(u); }; thumbsBox.appendChild(im); }); }
+  const setPdpMain = (u, el) => { const m = $("#pdpImg"); if (m) m.src = safeUrl(u); if (thumbsBox) thumbsBox.querySelectorAll("img").forEach(x => x.classList.toggle("on", x === el)); };
+  const firstThumb = $("#pdpThumb");
+  if (firstThumb){ firstThumb.classList.add("on"); firstThumb.onclick = () => setPdpMain(galImgs[0], firstThumb); }
+  if (thumbsBox){ thumbsBox.querySelectorAll("[data-gal-thumb]").forEach(x => x.remove()); galImgs.slice(1).forEach(u => { const im = document.createElement("img"); im.src = safeUrl(u); im.alt = ""; im.dataset.galThumb = "1"; im.onclick = () => setPdpMain(u, im); thumbsBox.appendChild(im); }); }
   $("#pdpCrumbCat").textContent = p.cat;
   $("#pdpCrumbName").textContent = p.name;
   $("#pdpTitle").textContent = p.name;
@@ -1519,8 +1522,7 @@ function renderPdpCustomFields(p){
     lb.hidden = false;
   };
   img.addEventListener("click", openLb);
-  const thumb = $("#pdpThumb");
-  if (thumb) thumb.addEventListener("click", openLb);
+  /* #pdpThumb lightbox NAHI kholta — tamam thumbnails sirf main image badalti hain (openProduct mein bandha hai); lightbox sirf main image (#pdpImg) ke click par khulta hai. */
   const closeLb = () => { const lb = $("#pdpLightbox"); if (lb) lb.hidden = true; };
   const lbEl = $("#pdpLightbox");
   if (lbEl) lbEl.addEventListener("click", closeLb);
