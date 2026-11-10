@@ -65,17 +65,22 @@ const LEGACY_SEC = { best_sellers: "best", promos: "promos", hot: "hot", new_arr
 function esc(s){ return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 /* V3 Part B security: escapeHtml = esc (storefront ke naam se match). */
 const escapeHtml = esc;
-/* V3 Part B security: safeUrl — sirf http(s)/relative image URLs. */
+/* V3 Part B security: safeUrl — sirf http(s)/relative image URLs.
+   X-1 fix (2026-11-10): scheme check ke baad ", ', <, >, backtick aur space
+   ko percent-encode karte hain, taa ke koi crafted URL quoted attribute
+   (src="...") se bahar na nikal sake (stored XSS). */
 function safeUrl(u){
   const t = String(u || "").trim();
   if (!t) return "";
-  if (/^https?:\/\//i.test(t)) return t;
-  if (t.startsWith("/") || t.startsWith("./") || t.startsWith("../")) return t;
-  if (!/^[a-z][a-z0-9+.-]*:/i.test(t)) return t;
+  const encAttr = s => s.replace(/["'<>` ]/g, c => ({ '"': "%22", "'": "%27", "<": "%3C", ">": "%3E", "`": "%60", " ": "%20" }[c]));
+  if (/^https?:\/\//i.test(t)) return encAttr(t);
+  if (t.startsWith("/") || t.startsWith("./") || t.startsWith("../")) return encAttr(t);
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(t)) return encAttr(t);
   return "";
 }
 
 let settingsLoaded = false;
+let settingsLoadFailed = false; /* HQ-A-03: load fail hua to save BLOCK hai. */
 let MY_EMAIL = null;
 let MY_ROLE = null;          // CURRENT store mein is user ki team role (platform-only ho to null)
 /* ---------- Multi-tenant store context ---------- */
@@ -88,6 +93,18 @@ let STORE_NAME = null;
 const effRole = () => MY_ROLE || (IS_PLATFORM ? "owner" : null);
 let ORDERS_CACHE = [];
 let PRODUCTS_CACHE = [];
+/* FE-P1: admin lists client-side 50/page (server abhi bhi poori list deta hai). */
+const ADMIN_PAGE_SIZE = 50;
+let ORDERS_PAGE = 1;
+let PRODUCTS_PAGE = 1;
+/* D-1 soft-delete: deleted_at wali rows list se chhupi rehti hain; server
+   deleted_at field na bheje to missing = "not deleted" (defensive). */
+let SHOW_DELETED_ORDERS = false;
+const isDeletedOrder = o => !!(o && o.deleted_at);
+/* L-4 COD payment: payment_status field server se na aaye to checkbox/stat
+   purane tareeqay par rehte hain (defensive — kuch nahi toot-ta). */
+const hasPaymentField = o => !!(o && Object.prototype.hasOwnProperty.call(o, "payment_status"));
+const isPaidOrder = o => !!(o && o.payment_status === "paid");
 let CATEGORIES_CACHE = [];
 let heroState = [];
 /* ---------- V2 state ---------- */
@@ -298,6 +315,20 @@ async function mfaListTotp(){
     return (data.totp || []).filter(f => f && f.status === "verified");
   } catch (e) { return []; }
 }
+async function mfaNextFriendlyName(){
+  // B2 fix (2026-11-08): Supabase requires friendlyName to be unique per user.
+  // Factor #1 uses "Authenticator", so factor #2 must be "Authenticator 2"
+  // (then 3, 4...). Check ALL factors (verified + unverified) — an unverified
+  // factor with the same name also causes a conflict.
+  try {
+    const { data, error } = await sb.auth.mfa.listFactors();
+    if (error || !data) return "Authenticator";
+    const taken = new Set((data.totp || []).map(f => String((f && f.friendly_name) || "").toLowerCase()));
+    let name = "Authenticator", n = 2;
+    while (taken.has(name.toLowerCase())) { name = "Authenticator " + n; n++; }
+    return name;
+  } catch (e) { return "Authenticator"; }
+}
 function mfaCodeOf(inputEl){
   const v = String((inputEl && inputEl.value) || "").replace(/\D/g, "").slice(0, 6);
   if (inputEl) inputEl.value = v;
@@ -363,7 +394,10 @@ $("#mfaEnrollStartBtn").onclick = async () => {
   btn.disabled = true;
   msg.textContent = "Authenticator set up ho raha hai…"; msg.className = "msg";
   try {
-    const { data, error } = await sb.auth.mfa.enroll({ factorType: "totp", friendlyName: "Authenticator" });
+    // B2 fix (2026-11-08): friendlyName must be unique per user — use the next
+    // free name ("Authenticator 2" for factor #2) instead of always "Authenticator".
+    const friendlyName = await mfaNextFriendlyName();
+    const { data, error } = await sb.auth.mfa.enroll({ factorType: "totp", friendlyName });
     if (error || !data || !data.totp) throw new Error((error && error.message) || "Enrol nahi ho saka");
     mfaEnrollFactorId = data.id;
     const qr = $("#mfaQrImg");
@@ -482,6 +516,15 @@ function showNoAccess(email, storeName){
     if (p) p.innerHTML = `Aap <strong>${esc(email || "")}</strong> se login hain, lekin <strong>${esc(storeName)}</strong> store ki team mein shamil nahi hain. Us store ke <strong>owner se rabta karein</strong> — woh Team tab se aapka email add kar dein ge.`;
   }
 }
+/* HQ-A-14: domain section sirf owner/admin ko — staff ko note dikhao,
+   failing control kabhi nahi. */
+function applyDomainVisibility(){
+  const box = $("#domainBox");
+  const note = $("#domainStaffNote");
+  const allowed = isAdminPlus();
+  if (box) box.style.display = allowed ? "" : "none";
+  if (note) note.hidden = allowed;
+}
 function showDash(){
   $("#loginView").classList.add("hidden");
   $("#noAccessView").classList.add("hidden");
@@ -493,6 +536,7 @@ function showDash(){
   $("#tabTeam").classList.toggle("hidden", !(effRole() === "owner" || effRole() === "admin"));
   const adminOnlyTabs = ["tabMeta"]; /* V5 Phase 5: Meta tab sirf Owner/Admin — staff ko token fields kabhi nahi. */
   adminOnlyTabs.forEach(id => document.getElementById(id).classList.toggle("hidden", !isAdminPlus()));
+  applyDomainVisibility(); /* HQ-A-14 */
   switchTab("dashboard");
   loadAll();
   if (!settingsLoaded) loadSettings();
@@ -567,11 +611,15 @@ async function uploadImage(file, folder){
   if (!String(file.type || "").startsWith("image/")) throw new Error("Sirf image file select karein.");
    const up = await compressImage(file);
      LAST_UPLOAD_INFO = { before: file.size, after: up.size };
+  /* DEC-20(c) / FE-P3: 2 MB max upload size — compression ke baad bhi
+     2 MB se bara ho to upload rok dein (storage + mobile load). Original
+     file par check nahi (compression aksar 5 MB photo ko bhi ~500 KB kar
+     deta hai) — check sirf asal upload payload par hai. */
+  if (up.size > 2 * 1024 * 1024) throw new Error("Ye photo 2 MB se bari hai (compression ke baad bhi " + fmtSize(up.size) + ") — chhoti photo use karein ya image ko resize karke dobara upload karein.");
   const match = String(up.name || "").match(/\.([a-zA-Z0-9]+)$/);
   const ext = match ? "." + match[1].toLowerCase() : "";
   const uniqueName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`;
-  if (!STORE_ID) throw new Error("Store load nahi hua — dobara try karein.");
-   const path = `${STORE_ID}/${folder}/${uniqueName}`;
+  const path = `${STORE_ID}/${folder}/${uniqueName}`;
   const { error } = await sb.storage.from("product-images").upload(path, up, { upsert: true, contentType: up.type });
   if (error) throw error;
   const { data } = sb.storage.from("product-images").getPublicUrl(path);
@@ -612,18 +660,31 @@ async function loadOrders(){
   const wrap = $("#ordersWrap");
   if (error){ wrap.innerHTML = `<p class="empty-note">Orders load nahi ho sakay: ${esc(error.message)}</p>`; ORDERS_CACHE = []; renderOrderStats(); return; }
   ORDERS_CACHE = data || [];
-  $("#statOrders").textContent = ORDERS_CACHE.length;
-  $("#statPending").textContent = ORDERS_CACHE.filter(o => o.status === "Pending").length;
-  $("#statRevenue").textContent = fmt(ORDERS_CACHE.filter(o => o.status === "Delivered").reduce((s,o) => s + Number(o.total || 0), 0));
+  /* D-1: stats mein deleted orders nahi ginte. */
+  const visibleOrders = ORDERS_CACHE.filter(o => !isDeletedOrder(o));
+  $("#statOrders").textContent = visibleOrders.length;
+  $("#statPending").textContent = visibleOrders.filter(o => o.status === "Pending").length;
+  /* L-4: revenue = Delivered AUR paid. payment_status field maujood na ho to
+     purana hisaab (sirf Delivered) — server migration ke baad hi paid-only. */
+  const deliveredOrders = visibleOrders.filter(o => o.status === "Delivered");
+  const paidDelivered = deliveredOrders.filter(o => !hasPaymentField(o) || isPaidOrder(o));
+  const unpaidDelivered = deliveredOrders.filter(o => hasPaymentField(o) && !isPaidOrder(o));
+  const revEl = $("#statRevenue");
+  revEl.textContent = fmt(paidDelivered.reduce((s,o) => s + Number(o.total || 0), 0));
+  revEl.title = unpaidDelivered.length
+    ? ("Delivered lekin cash nahi mila: " + fmt(unpaidDelivered.reduce((s,o) => s + Number(o.total || 0), 0)) + " (" + unpaidDelivered.length + " orders)")
+    : "";
   renderOrderStats();
   renderOrders();
 }
 /* Orders tab ke upar wali stats strip: 6 cards + status ki stacked bar.
    Counts CURRENT store ke loaded orders (ORDERS_CACHE) se bante hain. */
 function renderOrderStats(){
+  /* D-1: stats mein deleted orders nahi ginte. */
+  const rows = ORDERS_CACHE.filter(o => !isDeletedOrder(o));
   const counts = {};
-  STATUSES.forEach(s => { counts[s] = ORDERS_CACHE.filter(o => o.status === s).length; });
-  const total = ORDERS_CACHE.length;
+  STATUSES.forEach(s => { counts[s] = rows.filter(o => o.status === s).length; });
+  const total = rows.length;
   const statsEl = $("#orderStats");
   if (statsEl) statsEl.innerHTML = `<div class="ostat"><strong>${total}</strong><span>Kul Orders</span></div>`
     + STATUSES.map(s => `<div class="ostat"><strong style="color:${STATUS_COLORS[s]}">${counts[s]}</strong><span>${s}</span></div>`).join("");
@@ -636,18 +697,48 @@ function renderOrderStats(){
     ? STATUSES.map(s => `<span><i style="background:${STATUS_COLORS[s]}"></i>${s}: ${counts[s]} (${Math.round(counts[s] / total * 100)}%)</span>`).join("")
     : `<span>Abhi tak koi order nahi aaya.</span>`;
 }
+/* L-4: Delivered order par "cash collected" checkbox. Field server se na
+   aaye to ye function kabhi call nahi hota (column hi nahi banta). Paid ko
+   wapas unpaid sirf owner/admin kar sakta hai (staff ka checkbox disabled). */
+function paymentCellHtml(o){
+  if (!hasPaymentField(o)) return "—";
+  if (o.status !== "Delivered") return isPaidOrder(o) ? "✅ Paid" : "—";
+  const paid = isPaidOrder(o);
+  const lock = paid && effRole() === "staff";
+  return `<label style="display:flex;gap:5px;align-items:center;cursor:pointer;font-size:13px;white-space:nowrap"><input type="checkbox" data-pay="${o.id}" ${paid ? "checked" : ""} ${lock ? "disabled" : ""} style="width:17px;height:17px"> ${paid ? "✅ Cash mila" : "Cash mila?"}</label>`;
+}
+/* FE-P1: orders pager (50/page) — #ordersPager div mein. */
+function renderOrdersPager(total){
+  const el = $("#ordersPager");
+  if (!el) return;
+  const pages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
+  if (ORDERS_PAGE > pages) ORDERS_PAGE = pages;
+  if (total <= ADMIN_PAGE_SIZE){ el.innerHTML = ""; return; }
+  el.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap"><button class="btn small ghost" id="ordersPrevBtn" type="button" ${ORDERS_PAGE <= 1 ? "disabled" : ""}>← Pichla</button><span style="font-size:13.5px;font-weight:600">Page ${ORDERS_PAGE} / ${pages} (${total} orders)</span><button class="btn small ghost" id="ordersNextBtn" type="button" ${ORDERS_PAGE >= pages ? "disabled" : ""}>Agla →</button></div>`;
+  const prev = $("#ordersPrevBtn"); if (prev) prev.onclick = () => { if (ORDERS_PAGE > 1){ ORDERS_PAGE--; renderOrders(); } };
+  const next = $("#ordersNextBtn"); if (next) next.onclick = () => { if (ORDERS_PAGE < pages){ ORDERS_PAGE++; renderOrders(); } };
+}
 function renderOrders(){
   const wrap = $("#ordersWrap");
   const q = ($("#orderSearch").value || "").trim().toLowerCase();
   const sf = $("#orderStatusFilter").value || "";
-  const list = ORDERS_CACHE.filter(o =>
+  /* D-1: aam view mein deleted orders chhupe hote hain; "Deleted orders"
+     view mein SIRF deleted dikhte hain (restore ke saath). */
+  const pool = ORDERS_CACHE.filter(o => SHOW_DELETED_ORDERS ? isDeletedOrder(o) : !isDeletedOrder(o));
+  const list = pool.filter(o =>
     (!sf || o.status === sf) &&
     (!q || String(o.customer_name || "").toLowerCase().includes(q) || String(o.phone || "").includes(q)));
-  if (!ORDERS_CACHE.length){ wrap.innerHTML = `<p class="empty-note">Abhi tak koi order nahi aaya.</p>`; return; }
-  if (!list.length){ wrap.innerHTML = `<p class="empty-note">Is search/filter par koi order nahi mila.</p>`; return; }
+  if (!ORDERS_CACHE.length){ wrap.innerHTML = `<p class="empty-note">Abhi tak koi order nahi aaya.</p>`; renderOrdersPager(0); return; }
+  if (!list.length){ wrap.innerHTML = `<p class="empty-note">${SHOW_DELETED_ORDERS ? "Koi deleted order nahi hai." : (!pool.length ? "Saare orders deleted hain — 'Deleted orders dikhayein' se dekhein." : "Is search/filter par koi order nahi mila.")}</p>`; renderOrdersPager(0); return; }
+  /* FE-P1: 50/page. */
+  const pages = Math.max(1, Math.ceil(list.length / ADMIN_PAGE_SIZE));
+  if (ORDERS_PAGE > pages) ORDERS_PAGE = pages;
+  const pageList = list.slice((ORDERS_PAGE - 1) * ADMIN_PAGE_SIZE, ORDERS_PAGE * ADMIN_PAGE_SIZE);
+  /* L-4: payment column sirf tab jab data mein payment_status field ho. */
+  const showPayCol = list.some(hasPaymentField);
   wrap.innerHTML = `<table>
-    <thead><tr><th>#</th><th>Customer</th><th>Phone / City</th><th>Address</th><th>Items</th><th>Total</th><th>Status</th><th></th></tr></thead>
-    <tbody>${list.map(o => { const lines = orderLines(o); const meta = orderMeta(o); return `<tr data-order="${o.id}">
+    <thead><tr><th>#</th><th>Customer</th><th>Phone / City</th><th>Address</th><th>Items</th><th>Total</th><th>Status</th>${showPayCol ? "<th>Payment</th>" : ""}<th></th></tr></thead>
+    <tbody>${pageList.map(o => { const lines = orderLines(o); const meta = orderMeta(o); return `<tr data-order="${o.id}">
       <td><strong>#${o.id}</strong><br><small style="color:var(--muted)">${new Date(o.created_at).toLocaleString("en-PK",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"})}</small></td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${esc(o.phone)}<br><small style="color:var(--muted)">${esc(o.city)}</small></td>
@@ -655,7 +746,10 @@ function renderOrders(){
       <td class="order-items">${lines.map(lineLabel).join("<br>")}${lines.some(i => i.delivery_fee !== undefined) ? `<br><small>Delivery: ${(() => { const d = lines.reduce((s,i) => s + (Number(i.delivery_fee)||0), 0); return d === 0 ? "FREE" : fmt(d); })()}</small>` : ""}${meta.coupon ? `<br><small>🎟️ Coupon ${esc(meta.coupon)}: −${fmt(meta.discount)}</small>` : ""}</td>
       <td><strong>${fmt(o.total)}</strong></td>
       <td><select class="status" data-status="${o.id}">${STATUSES.map(s => `<option ${s===o.status?"selected":""}>${s}</option>`).join("")}</select></td>
-      <td style="white-space:nowrap"><button class="btn small ghost" data-edit-order="${o.id}">✎ Edit</button>${effRole() === "owner" ? ` <button class="btn small danger" data-del-order="${o.id}">Delete</button>` : ""}</td>
+      ${showPayCol ? `<td>${paymentCellHtml(o)}</td>` : ""}
+      <td style="white-space:nowrap">${SHOW_DELETED_ORDERS
+        ? (effRole() === "owner" ? `<button class="btn small" data-restore-order="${o.id}">↩ Restore</button>` : "")
+        : `<button class="btn small ghost" data-edit-order="${o.id}">✎ Edit</button>${effRole() === "owner" ? ` <button class="btn small danger" data-del-order="${o.id}">Delete</button>` : ""}`}</td>
     </tr>`; }).join("")}</tbody></table>`;
   wrap.querySelectorAll("[data-edit-order]").forEach(b => b.onclick = () => openOrderEdit(+b.dataset.editOrder));
   wrap.querySelectorAll("tbody tr[data-order]").forEach(tr => tr.onclick = e => {
@@ -667,7 +761,11 @@ function renderOrders(){
     if (error) showToast("Status update fail: " + error.message, "err"); else { await loadOrders(); loadDashboard(); showToast("✅ Order status update ho gaya.", "ok"); }
   });
   wrap.querySelectorAll("[data-del-order]").forEach(b => b.onclick = async () => {
-    if (!confirm("Yeh order delete kar dein?")) return;
+    /* D-1: soft-delete — order list se hat jayega lekin restore ho sakega
+       (Deleted orders view se). Server migration (deleted_at + restore_order)
+       apply hone ke baad hi ye soft-delete hai; us se pehle delete_order RPC
+       ka maujooda server behaviour chalta hai. */
+    if (!confirm("Yeh order delete kar dein? Order list se hat jayega lekin restore ho sakega — 'Deleted orders' view se wapas la sakte hain.")) return;
     const id = +b.dataset.delOrder;
     const msg = $("#ordersMsg");
     b.disabled = true; b.textContent = "Deleting…";
@@ -678,8 +776,8 @@ function renderOrders(){
       const { data: ok, error } = await sb.rpc("delete_order", { p_order_id: id });
       if (error) throw error;
       if (!ok) throw new Error("Order delete nahi hua — sirf Owner delete kar sakta hai.");
-      msg.textContent = `✅ Order #${id} delete ho gaya.`; msg.className = "msg ok";
-      showToast(`✅ Order #${id} delete ho gaya.`, "ok");
+      msg.textContent = `✅ Order #${id} delete ho gaya (soft-delete — Deleted orders se restore ho sakta hai).`; msg.className = "msg ok";
+      showToast(`✅ Order #${id} delete ho gaya (Deleted orders se restore ho sakta hai).`, "ok");
       await loadOrders(); loadDashboard();
     } catch (e) {
       msg.textContent = "Delete fail: " + e.message; msg.className = "msg err";
@@ -687,9 +785,34 @@ function renderOrders(){
       b.disabled = false; b.textContent = "Delete";
     }
   });
+  wrap.querySelectorAll("[data-pay]").forEach(cb => cb.onchange = async () => {
+    /* L-4: payment_status update — server par dedicated RPC abhi nahi, is
+       liye REST update try karte hain; fail ho to saaf error (staff ke liye
+       RLS owner/admin-only hai). */
+    const id = +cb.dataset.pay;
+    const paid = cb.checked;
+    const { error } = await sb.from("orders").update({ payment_status: paid ? "paid" : "unpaid" }).eq("id", id).eq("store_id", STORE_ID);
+    if (error){ cb.checked = !paid; showToast("Payment status save nahi ho saka: " + error.message, "err"); return; }
+    const row = ORDERS_CACHE.find(x => x.id === id); if (row) row.payment_status = paid ? "paid" : "unpaid";
+    showToast(paid ? "✅ Cash mil gaya — payment paid mark ho gaya." : "Payment wapas unpaid kar diya gaya.", "ok");
+    await loadOrders(); loadDashboard();
+  });
+  wrap.querySelectorAll("[data-restore-order]").forEach(b => b.onclick = async () => {
+    /* D-1: restore — server par restore_order RPC migration ke saath aayega;
+       na ho to saaf error, kuch nahi toot-ta. */
+    const id = +b.dataset.restoreOrder;
+    if (!confirm(`Order #${id} restore kar dein? Ye dobara orders list mein aa jayega.`)) return;
+    const { error } = await sb.rpc("restore_order", { p_order_id: id });
+    if (error){ showToast("Restore nahi ho saka: " + error.message + " (server par restore abhi available nahi — migration apply nahi hui).", "err"); return; }
+    showToast(`✅ Order #${id} restore ho gaya.`, "ok");
+    await loadOrders(); loadDashboard();
+  });
+  renderOrdersPager(list.length);
 }
-$("#orderSearch").addEventListener("input", renderOrders);
-$("#orderStatusFilter").addEventListener("change", renderOrders);
+$("#orderSearch").addEventListener("input", () => { ORDERS_PAGE = 1; renderOrders(); });
+$("#orderStatusFilter").addEventListener("change", () => { ORDERS_PAGE = 1; renderOrders(); });
+const _showDeletedToggle = $("#showDeletedOrders");
+if (_showDeletedToggle) _showDeletedToggle.addEventListener("change", e => { SHOW_DELETED_ORDERS = e.target.checked; ORDERS_PAGE = 1; renderOrders(); });
 
 /* ---------- Order Edit (modal) ----------
    Orders table mein koi note/delivery_fee/discount COLUMN nahi hai:
@@ -699,10 +822,12 @@ $("#orderStatusFilter").addEventListener("change", renderOrders);
    (discount/coupon ho to object shape mein convert ho jata hai). */
 let OE_ID = null;
 let OE_COUPON = null;
+let OE_ORIG = null; /* HQ-A-10: load hua order — save sirf BADLE hue fields bhejta hai. */
 function openOrderEdit(id){
   const o = ORDERS_CACHE.find(x => x.id === id);
   if (!o) return;
   OE_ID = id;
+  OE_ORIG = JSON.parse(JSON.stringify(o)); /* HQ-A-10: diff isi se banta hai. */
   const meta = orderMeta(o);
   OE_COUPON = meta.coupon;
   $("#oeTitle").textContent = "#" + o.id;
@@ -768,6 +893,7 @@ function oeRecalc(){
   $("#oeTotal").value = c.total;
   $("#oeCalcNote").textContent = `Hisaab: Items ${fmt(c.sub)} + Delivery ${fmt(c.del)} − Discount ${fmt(c.disc)} = ${fmt(c.total)}${OE_COUPON ? ` • 🎟️ Coupon: ${OE_COUPON}` : ""} • Total server hisaab karega (haath se nahi badal sakta)`;
 }
+
 $("#oeDiscount").addEventListener("input", oeRecalc);
 $("#oeAddItem").onclick = () => { addOeItemRow({}); oeRecalc(); };
 $("#oeCancelBtn").onclick = () => $("#orderEditModal").classList.add("hidden");
@@ -786,14 +912,47 @@ $("#oeSaveBtn").onclick = async () => {
   if (!customer_name){ msg.textContent = "Customer name khaali nahi ho sakta."; msg.className = "msg err"; return; }
   btn.disabled = true; btn.textContent = "Saving…";
   try {
-    /* Module 3b: details + status + financials — teen alag RPCs. Financial
-       section sirf Owner ko nazar aata hai; server total khud hisaab karta hai. */
-    let r = await sb.rpc("update_order_details", { p_order_id: OE_ID, p_customer_name: customer_name, p_phone: $("#oePhone").value.trim(), p_city: $("#oeCity").value.trim(), p_address: $("#oeAddress").value.trim(), p_tracking_note: $("#oeTrackNote") ? $("#oeTrackNote").value.trim() : null });
-    if (r.error) throw r.error;
-    r = await sb.rpc("update_order_status", { p_order_id: OE_ID, p_status: $("#oeStatus").value });
-    if (r.error) throw r.error;
-    if (effRole() === "owner"){
-      r = await sb.rpc("update_order_financials", { p_order_id: OE_ID, p_items: items, p_discount: c.disc });
+    /* HQ-A-10: sirf BADLE hue hisse save karte hain (loaded order se diff).
+       NOTE — ab bhi koi transaction nahi: details + status + financials
+       teen alag RPCs hain, is liye beech mein fail ho to pehle wala hissa
+       save ho chuka hota hai (partial save). Asli fix ek hi transactional
+       `update_order_all` RPC hai (DEC-29) — wo server migration abhi tayyar
+       nahi, is liye ye diff sirf ghair-zaroori writes kam karta hai, partial
+       save ka khatra khatam nahi karta. */
+    const origMeta = OE_ORIG ? orderMeta(OE_ORIG) : { coupon: null, discount: 0 };
+    const newDetails = {
+      p_customer_name: customer_name,
+      p_phone: $("#oePhone").value.trim(),
+      p_city: $("#oeCity").value.trim(),
+      p_address: $("#oeAddress").value.trim(),
+      p_tracking_note: $("#oeTrackNote") ? $("#oeTrackNote").value.trim() : null
+    };
+    const detailsChanged = !OE_ORIG
+      || newDetails.p_customer_name !== (OE_ORIG.customer_name || "")
+      || newDetails.p_phone !== (OE_ORIG.phone || "")
+      || newDetails.p_city !== (OE_ORIG.city || "")
+      || newDetails.p_address !== (OE_ORIG.address || "")
+      || (newDetails.p_tracking_note || "") !== (OE_ORIG.tracking_note || "");
+    const newStatus = $("#oeStatus").value;
+    const statusChanged = !OE_ORIG || newStatus !== OE_ORIG.status;
+    const finChanged = effRole() === "owner" && (!OE_ORIG
+      || JSON.stringify(items) !== JSON.stringify(OE_ORIG.items) || c.disc !== (origMeta.discount || 0));
+    if (!detailsChanged && !statusChanged && !finChanged){
+      msg.textContent = "Koi change nahi — kuch save nahi kiya gaya.";
+      msg.className = "msg";
+      btn.disabled = false; btn.textContent = "💾 Order Save karein";
+      return;
+    }
+    if (detailsChanged){
+      let r = await sb.rpc("update_order_details", { p_order_id: OE_ID, ...newDetails });
+      if (r.error) throw r.error;
+    }
+    if (statusChanged){
+      let r = await sb.rpc("update_order_status", { p_order_id: OE_ID, p_status: newStatus });
+      if (r.error) throw r.error;
+    }
+    if (finChanged){
+      let r = await sb.rpc("update_order_financials", { p_order_id: OE_ID, p_items: items, p_discount: c.disc });
       if (r.error) throw r.error;
     }
     $("#orderEditModal").classList.add("hidden");
@@ -921,6 +1080,17 @@ async function deleteProductAndImages(id){
   if (sErr) return { images: 0, storageWarn: true };
   return { images: paths.length };
 }
+/* FE-P1: products pager (50/page) — #productsPager div mein. */
+function renderProductsPager(total){
+  const el = $("#productsPager");
+  if (!el) return;
+  const pages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
+  if (PRODUCTS_PAGE > pages) PRODUCTS_PAGE = pages;
+  if (total <= ADMIN_PAGE_SIZE){ el.innerHTML = ""; return; }
+  el.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap"><button class="btn small ghost" id="productsPrevBtn" type="button" ${PRODUCTS_PAGE <= 1 ? "disabled" : ""}>← Pichla</button><span style="font-size:13.5px;font-weight:600">Page ${PRODUCTS_PAGE} / ${pages} (${total} products)</span><button class="btn small ghost" id="productsNextBtn" type="button" ${PRODUCTS_PAGE >= pages ? "disabled" : ""}>Agla →</button></div>`;
+  const prev = $("#productsPrevBtn"); if (prev) prev.onclick = () => { if (PRODUCTS_PAGE > 1){ PRODUCTS_PAGE--; renderProductsList(); } };
+  const next = $("#productsNextBtn"); if (next) next.onclick = () => { if (PRODUCTS_PAGE < pages){ PRODUCTS_PAGE++; renderProductsList(); } };
+}
 /* Products LIST (Shopify-style table) — Edit par upar wala card form khulta hai. */
 function renderProductsList(){
   const wrap = $("#productsWrap");
@@ -930,11 +1100,15 @@ function renderProductsList(){
     || String(p.name || "").toLowerCase().includes(q)
     || String(p.cat || "").toLowerCase().includes(q));
   $("#prodCount").textContent = PRODUCTS_CACHE.length ? `${list.length} / ${PRODUCTS_CACHE.length} products` : "";
-  if (!PRODUCTS_CACHE.length){ wrap.innerHTML = `<p class="empty-note">Abhi koi product nahi hai — upar "Add New Product" se pehla product banayein.</p>`; return; }
-  if (!list.length){ wrap.innerHTML = `<p class="empty-note">Is search par koi product nahi mila.</p>`; return; }
+  if (!PRODUCTS_CACHE.length){ wrap.innerHTML = `<p class="empty-note">Abhi koi product nahi hai — upar "Add New Product" se pehla product banayein.</p>`; renderProductsPager(0); return; }
+  if (!list.length){ wrap.innerHTML = `<p class="empty-note">Is search par koi product nahi mila.</p>`; renderProductsPager(0); return; }
+  /* FE-P1: 50/page (bulk select sirf is page ki rows par lagta hai). */
+  const pages = Math.max(1, Math.ceil(list.length / ADMIN_PAGE_SIZE));
+  if (PRODUCTS_PAGE > pages) PRODUCTS_PAGE = pages;
+  const pageList = list.slice((PRODUCTS_PAGE - 1) * ADMIN_PAGE_SIZE, PRODUCTS_PAGE * ADMIN_PAGE_SIZE);
   wrap.innerHTML = `<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-weight:600;font-size:14px"><input type="checkbox" id="bulkCheckAll"> Sab select karein</label><span id="bulkCount" style="color:var(--muted);font-size:13.5px;font-weight:600"></span><button class="btn small danger" id="bulkDelBtn" type="button" disabled>🗑 Selected delete karein</button><span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-left:1.5px solid var(--line);padding-left:10px"><select id="bulkEditField" style="border:1.5px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px"><option value="">Bulk edit…</option><option value="stock-in">Stock → In Stock</option><option value="stock-out">Stock → Out of Stock</option><option value="live-on">Live → Show</option><option value="live-off">Live → Hide</option><option value="featured-on">Featured → On</option><option value="featured-off">Featured → Off</option><option value="price-up">Price → +% barhayein</option><option value="price-down">Price → -% kam karein</option></select><input id="bulkEditVal" type="number" min="1" max="90" placeholder="%" style="width:70px;border:1.5px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;display:none"><button class="btn small" id="bulkEditBtn" type="button" disabled>Apply</button></span></div><table>
     <thead><tr><th></th><th>Photo</th><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Live</th><th>Featured</th><th></th></tr></thead>
-    <tbody>${list.map(p => `<tr>
+    <tbody>${pageList.map(p => `<tr>
       <td><input type="checkbox" data-bulk-check="${p.id}" ${BULK_SELECTED.has(p.id) ? "checked" : ""}></td>
       <td><img class="prod-thumb" src="${safeUrl(p.img || PLACEHOLDER_IMG)}" alt=""></td>
       <td><strong>${esc(p.name || "")}</strong><br><small style="color:var(--muted)">#${p.id}</small></td>
@@ -1045,8 +1219,9 @@ function renderProductsList(){
       showToast("✅ Product delete ho gaya." + (r.images ? ` ${r.images} image${r.images > 1 ? "s" : ""} bhi Storage se delete huin — space wapas mil gayi.` : ""), "ok");
     } catch (e) { showToast("Delete fail: " + e.message, "err"); }
   });
+  renderProductsPager(list.length);
 }
-$("#prodSearch").addEventListener("input", renderProductsList);
+$("#prodSearch").addEventListener("input", () => { PRODUCTS_PAGE = 1; renderProductsList(); });
 function openProductForm(id){
   const p = PRODUCTS_CACHE.find(x => x.id === id);
   if (!p) return;
@@ -1111,6 +1286,7 @@ function prodCard(p){
     </div>
     <p class="hint">Delivery fee: 0 = is product par <strong>FREE delivery</strong>; fee product par ek dafa lagti hai, quantity par nahi.</p>
     <p class="hint">Discount badge: khali/0 chor dein to badge price/old price se <strong>auto hisaab</strong> hoga; koi number likhein to card aur product page par <strong>wohi % badge</strong> nazar aayega.</p>
+    <p class="hint" data-discount-warn hidden style="color:#b45309">⚠️ Discount % likha hai lekin price kam nahi hua (old price nahi likha, ya price old price se kam nahi) — checkout par yehi price charge hoga, badge sirf % dikhayega.</p>
      <div class="row2"> <div><label>👗 Sizes (comma se alag — khaali = size nahi dikhega)</label><input data-f="sizes" value="${esc(sizesStr(p))}" placeholder="S, M, L, XL"></div> <div><label>🎨 Colors (naam + hex — khaali = color nahi dikhega)</label><input data-f="colors" value="${esc(colorsStr(p))}" placeholder="Maroon #7F1D1D, Green #0B3D2E"></div> </div> <p class="hint">Sizes/colors sirf is product ke liye hain — product page par pills/swatches banenge. Content tab se sizes ya colors poore store ke liye band bhi kiye ja sakte hain.</p> <div class="row2"> <div><label>🧵 Fabric (kapra — jaise Lawn, Chiffon)</label><input data-f="fabric" value="${esc(p.fabric || "")}" placeholder="Lawn"></div> </div> <label>📷 Product images upload (ek saath kai select karein)</label><input data-file="imgfile" type="file" accept="image/*" multiple>
     <p class="upload-msg" data-upload-msg>Files select karein to Save dabane par upload hongi. 1 file ho to sirf main image badlegi; 2 ya zyada hon to yehi poori image set ban jayegi (pehli main, baaki gallery). Koi file na ho to neeche wala URL use hoga.</p>
     <label>Ya image URL paste karein</label><input data-f="img" value="${esc(p.img||"")}" placeholder="https://…">
@@ -1191,6 +1367,31 @@ function renderImgOrder(card){
     });
   });
 }
+/* HQ-A-13: product form client-side validation — naam, price, discount %, stock. */
+function validateProductForm(card, get){
+  const errs = [];
+  if (!get("name").trim()) errs.push("Product name khaali nahi ho sakta.");
+  const priceRaw = get("price").trim();
+  if (!/^\d+$/.test(priceRaw)) errs.push("Price poora number (0 ya zyada) hona chahiye.");
+  const discRaw = get("discount_pct").trim();
+  if (discRaw !== "" && !/^\d+$/.test(discRaw)) errs.push("Discount % poora number hona chahiye.");
+  else if (discRaw !== "" && (parseInt(discRaw) < 0 || parseInt(discRaw) > 100)) errs.push("Discount % 0–100 ke beech hona chahiye.");
+  const stock = get("stock");
+  if (stock !== "in" && stock !== "out") errs.push("Stock 'In Stock' ya 'Out of Stock' hona chahiye.");
+  return errs;
+}
+/* F-17: discount_pct likha ho lekin price us hisaab se kam na hua ho to
+   warning dikhao (badge % se banta hai, checkout price se charge hota hai).
+   Warning hai — save block nahi karti. */
+function updateDiscountWarn(card){
+  const warn = card.querySelector("[data-discount-warn]");
+  if (!warn) return;
+  const disc = parseInt(card.querySelector('[data-f="discount_pct"]').value) || 0;
+  const price = parseInt(card.querySelector('[data-f="price"]').value) || 0;
+  const oldRaw = card.querySelector('[data-f="old"]').value.trim();
+  const old = oldRaw === "" ? null : parseInt(oldRaw);
+  warn.hidden = !(disc > 0 && (old === null || isNaN(old) || old <= price));
+}
 function bindProdCards(wrap){
   wrap.querySelectorAll(".prod").forEach(card => {
     const preview = card.querySelector("[data-preview]");
@@ -1205,8 +1406,10 @@ function bindProdCards(wrap){
       setUploadMsg(msg, `${files.length} image${files.length > 1 ? "s" : ""} selected — Save dabane par upload hongi.` + (files.length === 1 ? " Sirf main image badlegi." : " Yehi poori image set ban jayegi (pehli main, baaki gallery).") + (files.length > 10 ? " Sirf pehli 10 li jayengi." : ""));
     });
     renderImgOrder(card);
+    updateDiscountWarn(card); /* F-17 warning live update. */
     card.addEventListener("input", e => {
       if (e.target.matches('[data-f="img"]') || e.target.closest('[data-gallery-wrap]')) renderImgOrder(card);
+      updateDiscountWarn(card);
     });
   });
   wrap.querySelectorAll("[data-save]").forEach(b => b.onclick = async () => {
@@ -1215,6 +1418,14 @@ function bindProdCards(wrap){
     const msg = card.querySelector("[data-upload-msg]");
     const fileInput = card.querySelector('[data-file="imgfile"]');
     const files = fileInput.files ? Array.from(fileInput.files) : [];
+    /* HQ-A-13: pehle validation — ghalat data par upload/save dono rukte hain. */
+    const formErrs = validateProductForm(card, get);
+    if (formErrs.length){
+      setUploadMsg(msg, "❌ " + formErrs.join(" "), "err");
+      showToast("Product save nahi hua: " + formErrs.join(" "), "err");
+      return;
+    }
+    updateDiscountWarn(card); /* F-17: warning hai, block nahi. */
     let imageUrl = get("img").trim();
     const oldLabel = b.textContent;
     b.disabled = true; b.textContent = files.length ? "Uploading…" : "Saving…";
@@ -1334,6 +1545,13 @@ async function loadCategories(){
     const id = +b.dataset.csave;
     const name = tr.querySelector("[data-cname]").value.trim();
     if (!name){ showToast("Category ka naam khaali nahi ho sakta.", "err"); return; }
+    /* HQ-A-02 (DEC-10): rename products.cat ko bhi cascade karta hai. */
+    const oldCat = (CATEGORIES_CACHE.find(c => c.id === id) || {}).name || "";
+    const renamed = oldCat && oldCat !== name;
+    const affected = renamed ? PRODUCTS_CACHE.filter(p => p.cat === oldCat).length : 0;
+    if (renamed && affected > 0){
+      if (!confirm(`${affected} products is category mein hain — rename karne se un ka category bhi badal jayega?`)) return;
+    }
     let image = tr.querySelector("[data-cimg]").value.trim();
     const file = tr.querySelector("[data-cfile]").files[0];
     const old = b.textContent; b.disabled = true; b.textContent = "Saving…";
@@ -1341,17 +1559,39 @@ async function loadCategories(){
       if (file) image = await uploadImage(file, "categories");
       const { error } = await sb.from("categories").update({ name, image, sort: parseInt(tr.querySelector("[data-csort]").value) || 0 }).eq("id", id).eq("store_id", STORE_ID);
       if (error) throw error;
-      $("#catMsg").textContent = "✅ Category save ho gayi."; $("#catMsg").className = "msg ok";
-      showToast("✅ Category save ho gayi.", "ok");
+      if (renamed && affected > 0){
+        const { error: pErr } = await sb.from("products").update({ cat: name }).eq("store_id", STORE_ID).eq("cat", oldCat);
+        if (pErr){
+          $("#catMsg").textContent = `Category rename ho gayi, lekin ${affected} products move nahi hue: ` + pErr.message;
+          $("#catMsg").className = "msg err";
+          showToast("Category rename ho gayi, lekin products move nahi hue: " + pErr.message, "err");
+        } else {
+          $("#catMsg").textContent = `✅ Category save ho gayi — ${affected} products updated.`;
+          $("#catMsg").className = "msg ok";
+          showToast(`✅ Category save ho gayi — ${affected} products updated.`, "ok");
+        }
+      } else {
+        $("#catMsg").textContent = "✅ Category save ho gayi."; $("#catMsg").className = "msg ok";
+        showToast("✅ Category save ho gayi.", "ok");
+      }
       loadCategories(); loadProducts();
     } catch (e) { showToast("Category save fail: " + e.message, "err"); }
     b.disabled = false; b.textContent = old;
   });
   wrap.querySelectorAll("[data-cdel]").forEach(b => b.onclick = async () => {
-    if (!confirm("Yeh category delete kar dein?\n\nNote: is category ke PRODUCTS delete NAHI honge — un par category ka text waisa hi rahega, sirf category nav/tiles/footer se gayab hogi.")) return;
-    const { error } = await sb.from("categories").delete().eq("id", +b.dataset.cdel).eq("store_id", STORE_ID);
+    const id = +b.dataset.cdel;
+    const catName = (CATEGORIES_CACHE.find(c => c.id === id) || {}).name || "";
+    const affected = catName ? PRODUCTS_CACHE.filter(p => p.cat === catName).length : 0;
+    if (!confirm(`Yeh category delete kar dein?\n\nNote: is category ke PRODUCTS delete NAHI honge — ${affected} product ki category "General" kar di jayegi, aur category nav/tiles/footer se gayab hogi.`)) return;
+    /* HQ-A-02 (DEC-10): pehle products General par, phir category delete —
+       taa ke beech mein fail ho to koi orphan category text na bane. */
+    if (affected > 0){
+      const { error: pErr } = await sb.from("products").update({ cat: "General" }).eq("store_id", STORE_ID).eq("cat", catName);
+      if (pErr){ showToast("Category delete nahi hui — products General par move nahi ho sake: " + pErr.message, "err"); return; }
+    }
+    const { error } = await sb.from("categories").delete().eq("id", id).eq("store_id", STORE_ID);
     if (error) showToast("Delete fail: " + error.message, "err");
-    else { $("#catMsg").textContent = "✅ Category delete ho gayi (products mehfooz hain)."; $("#catMsg").className = "msg ok"; showToast("✅ Category delete ho gayi.", "ok"); loadCategories(); }
+    else { $("#catMsg").textContent = `✅ Category delete ho gayi (${affected} products General par move ho gaye).`; $("#catMsg").className = "msg ok"; showToast("✅ Category delete ho gayi.", "ok"); loadCategories(); loadProducts(); }
   });
 }
 $("#addCategoryBtn").onclick = async () => {
@@ -1497,7 +1737,7 @@ async function loadDashboard(){
     msg.textContent = "Visits load nahi ho sakay (analytics migration run hai to thori dair mein data aana shuru hoga): " + e.message;
     msg.className = "msg err";
   }
-  const orders = ORDERS_CACHE.filter(o => o.status !== "Cancelled");
+  const orders = ORDERS_CACHE.filter(o => o.status !== "Cancelled" && !isDeletedOrder(o));
   const countByDay = rows => { const m = {}; rows.forEach(r => { const k = dayKeyOf(new Date(r.created_at)); m[k] = (m[k] || 0) + 1; }); return m; };
   const sumByDay = rows => { const m = {}; rows.forEach(r => { const k = dayKeyOf(new Date(r.created_at)); m[k] = (m[k] || 0) + Number(r.total || 0); }); return m; };
   const vBy = countByDay(visits), oCntBy = countByDay(orders), oSumBy = sumByDay(orders);
@@ -1551,8 +1791,8 @@ async function loadDashboard(){
     ? `<table><tbody>${topList.map(([name, a], i) => `<tr><td>${i + 1}. <strong>${esc(name)}</strong></td><td>${a.qty} sold</td><td><strong>${fmt(a.rev)}</strong></td></tr>`).join("")}</tbody></table>`
     : `<p class="empty-note">Abhi tak koi order record nahi.</p>`;
 
-  /* Recent orders */
-  const recent = ORDERS_CACHE.slice(0, 5);
+  /* Recent orders — deleted orders nahi dikhte (D-1). */
+  const recent = ORDERS_CACHE.filter(o => !isDeletedOrder(o)).slice(0, 5);
   $("#recentOrdersWrap").innerHTML = recent.length
     ? `<table><tbody>${recent.map(o => `<tr><td><strong>#${o.id}</strong></td><td>${esc(o.customer_name)}</td><td>${fmt(o.total)}</td><td><span class="pill">${esc(o.status)}</span></td><td><small style="color:var(--muted)">${new Date(o.created_at).toLocaleString("en-PK",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"})}</small></td></tr>`).join("")}</tbody></table>`
     : `<p class="empty-note">Abhi tak koi order record nahi.</p>`;
@@ -2127,17 +2367,35 @@ function fillSettings(s){
   /* V4 Phase 2: active theme ke controls dikhayein/chhupayein. */
   applyThemeVisibility();
 }
+/* HQ-A-03: Save buttons ko load-fail par disable rakho; success par enable. */
+function setSettingsSaveDisabled(disabled){
+  document.querySelectorAll(".js-save, #globalSaveBtn").forEach(b => { b.disabled = disabled; });
+}
+function showSettingsLoadBanner(show){
+  const banner = $("#settingsLoadBanner");
+  if (banner) banner.hidden = !show;
+}
 async function loadSettings(){
-  settingsLoaded = true;
+  /* HQ-A-03: settingsLoaded sirf SUCCESSFUL load par true hota hai — load
+     shuru hote hi true karna defaults se poori settings wipe kar deta tha. */
   const msg = $("#settingsMsg");
   try {
     const { data, error } = await sb.rpc("get_store_settings", { p_store_id: STORE_ID });
     if (error) throw error;
     SETTINGS_STATE = mergeAdminSettings(data);
     fillSettings(SETTINGS_STATE);
+    settingsLoaded = true;
+    settingsLoadFailed = false;
+    setSettingsSaveDisabled(false);
+    showSettingsLoadBanner(false);
   } catch (e) {
+    settingsLoaded = false;
+    settingsLoadFailed = true;
     SETTINGS_STATE = mergeAdminSettings(null);
     fillSettings(SETTINGS_STATE);
+    setSettingsSaveDisabled(true);
+    showSettingsLoadBanner(true);
+    showToast("Settings load nahi hui — save mat karein. Page reload karein.", "err");
     msg.textContent = "Settings load nahi huye (migration run hai?); defaults dikhaye ja rahe hain: " + e.message;
     msg.className = "msg err";
   }
@@ -2364,7 +2622,30 @@ function fieldRowHtml(f = {}){
 function bindFieldRows(wrap){
   if (!wrap) return;
   bindDragRows(wrap, ".fld-row");
-  wrap.querySelectorAll("[data-fdel]").forEach(b => b.onclick = () => b.closest(".fld-row").remove());
+  wrap.querySelectorAll("[data-fdel]").forEach(b => b.onclick = () => { b.closest(".fld-row").remove(); checkFieldRowsWarn(wrap); });
+  /* F-21: required select jis ke zero options hon — warning line (save
+     block nahi karti; checkout par aisi field customer ko rok degi). */
+  if (!wrap._fieldsWarn){
+    const warn = document.createElement("p");
+    warn.className = "hint";
+    warn.style.color = "#b45309";
+    warn.hidden = true;
+    wrap.after(warn);
+    wrap._fieldsWarn = warn;
+  }
+  if (!wrap._fieldsWarnBound){
+    wrap.addEventListener("input", () => checkFieldRowsWarn(wrap));
+    wrap.addEventListener("change", () => checkFieldRowsWarn(wrap));
+    wrap._fieldsWarnBound = true;
+  }
+  checkFieldRowsWarn(wrap);
+}
+function checkFieldRowsWarn(wrap){
+  const warn = wrap._fieldsWarn;
+  if (!warn) return;
+  const bad = readFieldRows(wrap).filter(f => f.type === "select" && f.required && (!f.options || !f.options.length));
+  warn.hidden = !bad.length;
+  if (bad.length) warn.textContent = "⚠️ " + bad.map(f => "“" + f.label + "”").join(", ") + " — required select field hai lekin is ke koi options nahi hain; yeh field checkout block kar dega. Pehle options likhein ya Required hatayein.";
 }
 function renderFieldRows(wrap, fields){
   if (!wrap) return;
@@ -2898,8 +3179,17 @@ function metaTestPixel(){
   const pid = String((($("#metaPixelId") || {}).value) || "").replace(/[^0-9]/g, "");
   const msg = $("#metaMsg");
   if (!pid){ if (msg){ msg.textContent = "Pehle Pixel ID likhein, phir test karein."; msg.className = "msg err"; } return; }
+  /* HQ-A-08: fbq admin page par kabhi load nahi hota (pixel script sirf
+     storefront par hai) — is liye pehle fbq check karein; na ho to jhooti
+     success NA dikhayein. */
+  if (typeof window.fbq !== "function"){
+    try { const arr = JSON.parse(localStorage.getItem("sn_meta_log_v1") || "[]"); arr.unshift({ t: new Date().toISOString(), kind: "test", name: "PageView", ok: false, detail: "fbq maujood nahi — test nahi bheja gaya" }); localStorage.setItem("sn_meta_log_v1", JSON.stringify(arr.slice(0, 20))); } catch (e){}
+    metaRenderLog();
+    if (msg){ msg.textContent = "Pixel load nahi hua — admin page par pixel script nahi hai; test nahi bheja gaya. Storefront khol kar wahan se test karein ya Events Manager check karein."; msg.className = "msg err"; }
+    return;
+  }
   try {
-    if (typeof window.fbq === "function"){ window.fbq("track", "PageView", {}, { eventID: "test_" + Date.now().toString(36) }); }
+    window.fbq("track", "PageView", {}, { eventID: "test_" + Date.now().toString(36) });
     try { const arr = JSON.parse(localStorage.getItem("sn_meta_log_v1") || "[]"); arr.unshift({ t: new Date().toISOString(), kind: "test", name: "PageView", ok: true, detail: "admin test — Events Manager → Test Events mein dekhein" }); localStorage.setItem("sn_meta_log_v1", JSON.stringify(arr.slice(0, 20))); } catch (e){}
     metaRenderLog();
     if (msg){ msg.textContent = "Test PageView bhej diya — Meta Events Manager → Test Events mein 1–2 minute mein nazar aana chahiye."; msg.className = "msg ok"; }
@@ -2911,6 +3201,20 @@ function bindMetaTab(){
   const tg = $("#metaTokenToggle"); if (tg) tg.onclick = () => { const tok = $("#metaCapiToken"); if (!tok) return; tok.type = tok.type === "password" ? "text" : "password"; tg.textContent = tok.type === "password" ? "👁 dikhayein" : "🙈 chhupayein"; };
 }
 async function persistAllSettings(){
+  /* HQ-A-03: load fail / load pending ho to save se inkaar — defaults se
+     asal settings overwrite nahi honi chahiye. */
+  if (settingsLoadFailed || !settingsLoaded){
+    const blockMsg = settingsLoadFailed
+      ? "Settings load nahi hui — save mat karein. Page reload karein, phir save karein."
+      : "Settings abhi load ho rahi hain — thori dair ruk kar dobara save karein.";
+    showSettingsLoadBanner(settingsLoadFailed);
+    setSettingsSaveDisabled(settingsLoadFailed);
+    const topMsg0 = $("#topSaveMsg");
+    if (topMsg0) topMsg0.textContent = blockMsg;
+    showToast(blockMsg, "err");
+    const m0 = $("#settingsMsg"); if (m0){ m0.textContent = blockMsg; m0.className = "msg err"; }
+    return;
+  }
   const saveBtns = [...document.querySelectorAll(".js-save, #globalSaveBtn")];
   const savedLabels = saveBtns.map(b => b.innerHTML);
   saveBtns.forEach(b => { b.disabled = true; b.textContent = "Saving…"; });
@@ -2918,6 +3222,8 @@ async function persistAllSettings(){
   Object.values(msgEls).forEach(m => { if (m){ m.textContent = ""; m.className = "msg"; } });
   const topMsg = $("#topSaveMsg");
   if (topMsg) topMsg.textContent = "";
+  let pendingToken = null;   /* HQ-A-09: token save settings ke BAAD, alag se. */
+  let tokenSaveError = null;
   try {
     const data = JSON.parse(JSON.stringify(SETTINGS_STATE || mergeAdminSettings(null)));
     /* Hero slides (pending file uploads samet) */
@@ -3022,20 +3328,12 @@ async function persistAllSettings(){
          chalta hai, UPDATE/DELETE nahi — test se prove). Is liye token save ab Edge
          Function se hota hai — function caller ka JWT verify karke (owner/admin/
          platform admin) aur service_role se upsert/delete karta hai (RLS bypass). */
+      /* HQ-A-09: token yahan sirf NOTE karte hain — save settings ke baad
+         alag se hoga, taa ke token fail ho to settings save na ruke. */
       const tokEl = $("#metaCapiToken");
       const delEl = $("#metaCapiDelete");
       const newTok = tokEl ? String(tokEl.value || "").trim() : "";
-      if ((delEl && delEl.checked) || newTok){
-        const { data: sessData } = await sb.auth.getSession();
-        const accessToken = sessData && sessData.session ? sessData.session.access_token : "";
-        if (!accessToken) throw new Error("CAPI token save nahi ho saka — admin session nahi mili, dobara sign in karein.");
-        const tokResp = await fetch(SUPABASE_URL + "/functions/v1/meta-token-save", { method: "POST", headers: { apikey: SUPABASE_ANON_KEY, Authorization: "Bearer " + accessToken, "Content-Type": "application/json" }, body: JSON.stringify({ store_id: STORE_ID, capi_token: newTok, delete: !!(delEl && delEl.checked) }) });
-        let tokJson = {};
-      try { tokJson = await tokResp.json(); } catch (e) {}
-          if (!tokResp.ok || !tokJson.ok) throw new Error("CAPI token save nahi ho saka — " + (tokJson.error || ("HTTP " + tokResp.status)));
-      }
-      if (tokEl) tokEl.value = "";
-      if (delEl) delEl.checked = false;
+      if ((delEl && delEl.checked) || newTok) pendingToken = { newTok, del: !!(delEl && delEl.checked) };
     }
     /* V3.3 Content — sirf jab Content tab bhara gaya ho; warna SETTINGS_STATE
        ki values (stored ya defaults) waisi ki waisi rehti hain. */
@@ -3057,6 +3355,24 @@ async function persistAllSettings(){
     if (effRole() === "staff"){ delete savePayload.meta; delete savePayload.customCode; }
     const { data: saved, error } = await sb.rpc("update_store_settings", { p_store_id: STORE_ID, p_data: savePayload });
     if (error) throw error;
+    /* HQ-A-09: settings save ho gayin — AB token save karein, apni try/catch
+       mein. Token fail ho to settings ka save wapas nahi hota; token ka
+       natija alag se bataya jata hai (neeche success message mein). */
+    if (pendingToken){
+      try {
+        const { data: sessData } = await sb.auth.getSession();
+        const accessToken = sessData && sessData.session ? sessData.session.access_token : "";
+        if (!accessToken) throw new Error("admin session nahi mili, dobara sign in karein.");
+        const tokResp = await fetch(SUPABASE_URL + "/functions/v1/meta-token-save", { method: "POST", headers: { apikey: SUPABASE_ANON_KEY, Authorization: "Bearer " + accessToken, "Content-Type": "application/json" }, body: JSON.stringify({ store_id: STORE_ID, capi_token: pendingToken.newTok, delete: pendingToken.del }) });
+        let tokJson = {};
+        try { tokJson = await tokResp.json(); } catch (e) {}
+        if (!tokResp.ok || !tokJson.ok) throw new Error(tokJson.error || ("HTTP " + tokResp.status));
+        const tokEl2 = $("#metaCapiToken"); if (tokEl2) tokEl2.value = "";
+        const delEl2 = $("#metaCapiDelete"); if (delEl2) delEl2.checked = false;
+      } catch (tokErr) {
+        tokenSaveError = tokErr;
+      }
+    }
     SETTINGS_STATE = saved || data; /* (A) Luxury auto-seed — theme save ho gaya, ab categories (agar khaali hon). Seed apni ghalti khud pakarta hai (toast) — save is se fail nahi hota. */ await seedLuxuryCategories(data);
     renderHeroEditor();
 /* V4 Phase 2: theme badla ho to Content/builder/Style dobara dikhayein. */
@@ -3064,13 +3380,20 @@ applyThemeVisibility();
     const okText = "✅ Save ho gaya — store reload karke changes dekhein.";
     Object.values(msgEls).forEach(m => { if (m){ m.textContent = okText; m.className = "msg ok"; } });
     showToast("✅ Save ho gaya — store reload karke changes dekhein.", "ok");
+    /* HQ-A-09: token ka natija alag se — settings save ho chuki hain. */
+    if (tokenSaveError){
+      const tokMsg = "CAPI token save nahi ho saka: " + tokenSaveError.message + " — settings save ho gayin, token dobara save karein.";
+      if (msgEls.meta){ msgEls.meta.textContent = tokMsg; msgEls.meta.className = "msg err"; }
+      showToast(tokMsg, "err");
+    }
     if (topMsg){ topMsg.textContent = "✅ Save ho gaya"; setTimeout(() => { topMsg.textContent = ""; }, 3500); }
   } catch (e) {
     Object.values(msgEls).forEach(m => { if (m){ m.textContent = "Save fail: " + e.message; m.className = "msg err"; } });
     if (topMsg) topMsg.textContent = "";
     showToast("Save fail: " + e.message, "err");
   } finally {
-    saveBtns.forEach((b, i) => { b.disabled = false; b.innerHTML = savedLabels[i]; });
+    /* HQ-A-03: load fail hua to buttons dobara enable NA karein. */
+    if (!settingsLoadFailed) saveBtns.forEach((b, i) => { b.disabled = false; b.innerHTML = savedLabels[i]; });
   }
 }
 /* ---------- V3 Part B: CSV export + Low-stock alerts + Domain ---------- */
@@ -3242,6 +3565,12 @@ function validDomain(d){
 }
 async function saveDomain(clear){
   const msg = $("#domMsg");
+  /* HQ-A-14: staff yahan kabhi nahi aana chahiye (section hidden hai) — phir
+     bhi guard, taa ke koi direct call bhi server error na khaye. */
+  if (!isAdminPlus()){
+    msg.textContent = "Domain sirf owner/admin ke liye hai.";
+    msg.className = "msg err"; return;
+  }
   const inp = $("#domInput");
   const domain = clear ? "" : inp.value.trim().toLowerCase();
   if (!clear && !validDomain(domain)){

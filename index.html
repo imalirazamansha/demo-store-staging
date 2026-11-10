@@ -5,6 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ShopNest — Pakistan Ka Smart Store</title>
 <meta name="description" content="Smart gadgets and everyday essentials with Cash on Delivery across Pakistan.">
+<!-- M-3 / DEC-19: CSP meta (GitHub Pages custom headers nahi bhej sakta — meta hi ek rasta hai).
+     NOTE: decisions doc ki list mein connect-src/style-src/font-src/media-src nahi thay, lekin baghair un ke
+     page kaam hi nahi karta (Supabase RPCs, Google Fonts, reels video sab block ho jate) — is liye ye
+     minimal allowances zaroori hain. frame-ancestors meta mein kuch browsers ignore karte hain (DEC-19);
+     storefront ko embed hona bhi ho sakta hai, is liye yahan frame-buster nahi lagaya (sirf admin/HQ par hota hai). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://unpkg.com https://connect.facebook.net 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data:; media-src https: data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://connect.facebook.net https://*.facebook.com; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; upgrade-insecure-requests">
+<style>
+/* FE-A1: visible keyboard focus (storefront) — styles.css mein koi :focus-visible rule nahi hai. */
+:focus-visible{outline:3px solid var(--green,#1d7a3d);outline-offset:2px}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{border-radius:6px}
+/* FE-P5: noscript + FE-P4: CDN-error banners. */
+.noscript-msg,.cdn-error{max-width:720px;margin:14px auto;padding:14px 18px;border-radius:12px;text-align:center;font-size:15px;line-height:1.6}
+.noscript-msg{background:#fef3c7;color:#92400e;border:1px solid #fcd34d}
+.cdn-error{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
+</style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
@@ -12,6 +27,10 @@
 </head>
 <body>
 <div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#b91c1c;color:#fff;text-align:center;font-weight:700;font-size:14px;padding:8px 12px;letter-spacing:1px;">STAGING — TEST ONLY — NOT PRODUCTION — shopnest-staging</div>
+<!-- FE-P5: JavaScript band ho to saaf message (khali page nahi). -->
+<noscript><div class="noscript-msg"><strong>JavaScript on karein</strong> — is store ko dekhne aur order karne ke liye browser mein JavaScript on karna zaroori hai.</div></noscript>
+<!-- FE-P4: supabase-js CDN + local copy dono fail hon to ye banner dikhta hai (script.js guard + fallback script se). -->
+<div class="cdn-error" id="cdnError" hidden><strong>Store load nahi ho saka.</strong> Internet check karke page refresh karein — agar masla rahe to store se rabta karein.</div>
 
 <!-- ===== SVG ICON SPRITE (UI stroke icons + brand icons) =====
      Stroke icons: <symbol id="i-*"> (feather-style, currentColor).
@@ -61,7 +80,7 @@
 
 <!-- Multi-tenant notice: store suspended / na milne par sirf ye nazar aata hai
      (body.store-closed baaki saara page chhupa deta hai). -->
-<div class="store-notice" id="storeNotice" hidden>
+<div class="store-notice" id="storeNotice" aria-live="polite" hidden>
   <div class="store-notice-card">
     <div class="store-notice-icon"><svg class="ic" aria-hidden="true"><use href="#i-bag"/></svg></div>
     <h1 id="noticeTitle">Store</h1>
@@ -162,6 +181,7 @@
       </label>
     </div>
     <div class="grid" id="grid"></div>
+    <div class="center-action"><button class="btn outline wide" id="loadMoreBtn" type="button" hidden>LOAD MORE</button></div>
     <p class="empty" id="emptyMsg" hidden>No products found. Search, category ya budget filter change karke dobara dekhein.</p>
     <p class="empty error" id="loadError" hidden><svg class="ic" aria-hidden="true"><use href="#i-alert"/></svg> Products load nahi ho sakay. Internet check karke page refresh karein.</p>
   </main>
@@ -347,6 +367,7 @@
       <input class="hp-field" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
       <button class="btn primary big" type="submit" id="placeOrderBtn"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg> ORDER PLACE KAREIN</button>
       <p class="form-error" id="checkoutError"></p>
+      <p class="center"><button class="btn outline" id="idemRetryBtn" type="button" hidden>Dobara try karein</button></p>
       <p class="muted center"><svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg> Aapki details sirf delivery ke liye istemal hongi.</p>
     </form>
     <aside class="co-box summary-panel">
@@ -407,7 +428,7 @@
 
 <div class="modal" id="trackModal" aria-hidden="true"><div class="modal-card small"><button class="icon-btn modal-x" id="trackCloseBtn" type="button" aria-label="Close"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button><h2>📦 Track Order</h2><p class="muted" style="margin-bottom:12px">Apna order ID aur wohi mobile number likhein jo order karte waqt diya tha.</p><form id="trackForm"><label>Order ID<input id="trackOrderId" type="number" min="1" placeholder="e.g. 12" required></label><label>Mobile number<input id="trackPhone" type="text" placeholder="03XX-XXXXXXX" required></label><button class="btn primary big" type="submit" style="margin-top:10px">TRACK KAREIN</button></form><div id="trackResult" style="margin-top:14px"></div></div></div>
 <div class="modal" id="policyModal" aria-hidden="true"><div class="modal-card small"><button class="icon-btn modal-x" data-close type="button" aria-label="Close"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button><h2 id="policyTitle">Policy</h2><div class="policy-body" id="policyBody"></div></div></div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" aria-live="polite"></div>
 
 <!-- V3.10 Luxury bottom nav (mobile) — R9 (§14): nav script tags se PEHLE hai, warna bindLuxuryUI (script parse par chalta hai, koi DOMContentLoaded nahi) ko nav milta hi nahi aur buttons kabhi bind nahi hote. Nav position:fixed hai, DOM jagah se layout nahi badalta. -->
 <nav id="luxBottomNav" aria-label="Store navigation" hidden>
@@ -417,7 +438,11 @@
   <button type="button" data-luxnav="new"><svg class="ic" aria-hidden="true"><use href="#i-flame"/></svg><span>New In</span></button>
   <button type="button" data-luxnav="cart"><svg class="ic" aria-hidden="true"><use href="#i-cart"/></svg><span>Cart</span><b class="lux-nav-badge" id="luxNavCartCount" hidden>0</b></button>
   </nav>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- M-3 / FE-P4: supabase-js PINNED 2.119.0 + SRI + crossorigin. CDN fail ho to
+       vendored local copy (js/supabase.min.js) — dono fail hon to #cdnError banner. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.min.js" integrity="sha384-gnyZit14c5lnGcarmA166QQjjJXpucw25ogZXuwH3HxxY904zHkBqmxVpelsPorb" crossorigin="anonymous"></script>
+  <script>if(!window.supabase){document.write('<script src="js/supabase.min.js"><\/script>')}</script>
+  <script>if(!window.supabase){var _ce=document.getElementById("cdnError");if(_ce)_ce.hidden=false;}</script>
 <script src="themes.js"></script>
      <script src="themes-v4.js"></script>
 

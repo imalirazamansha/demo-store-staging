@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
+<!-- M-3 / DEC-19: CSP (meta — GitHub Pages headers nahi bhejta). Decisions doc ki
+     directives + zaroori additions: connect-src (Supabase API warna block),
+     style-src 'unsafe-inline' + Google Fonts (page mein 132 inline styles hain),
+     font-src (Google Fonts). Verbatim directives ye teeno ke baghair page torti. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://unpkg.com https://connect.facebook.net 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data:; media-src https: data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://connect.facebook.net https://*.facebook.com; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; upgrade-insecure-requests">
+<!-- DEC-19: frame-buster (admin/HQ only) — CSP meta mein frame-ancestors ignore hota hai. -->
+<script>if(window.top!==window.self){window.top.location=window.location;}</script>
 <title>ShopNest Admin — Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -211,10 +218,13 @@
   .btn:disabled{opacity:.55;cursor:not-allowed}
   tbody tr:hover{background:#f8fafc}
   input:focus,select:focus,textarea:focus{outline:2px solid #86efac;outline-offset:1px}
+  /* FE-A1: buttons/links ke liye bhi visible focus (pehle sirf form controls par tha). */
+  button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #86efac;outline-offset:2px}
 </style>
 </head>
 <body>
 <div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#b91c1c;color:#fff;text-align:center;font-weight:700;font-size:14px;padding:8px 12px;letter-spacing:1px;">STAGING — TEST ONLY — NOT PRODUCTION — shopnest-staging</div>
+<noscript><p style="background:#fee2e2;color:#991b1b;font-weight:700;padding:14px;text-align:center">JavaScript on karein — Admin chalane ke liye JavaScript zaroori hai.</p></noscript>
 
 <div class="topbar">
   <div class="brand"><svg class="ic" viewBox="0 0 24 24"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>Shop<span>Nest</span> Admin</div>
@@ -224,7 +234,7 @@
       <select id="storeSwitcher" title="Store badlein"></select>
       <a id="viewStoreLink" href="index.html" target="_blank">Storefront ↗</a>
     </span>
-    <span id="topSaveMsg"></span>
+    <span id="topSaveMsg" aria-live="polite"></span>
     <button class="btn small hidden" id="globalSaveBtn"><svg class="ic" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>Save</button>
     <button class="btn small ghost hidden" id="logoutBtn"><svg class="ic" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>Logout</button>
   </div>
@@ -371,10 +381,13 @@
         <option value="">Saare status</option>
         <option>Pending</option><option>Confirmed</option><option>Shipped</option><option>Delivered</option><option>Cancelled</option>
       </select>
+      <!-- D-1: deleted orders ka alag view (restore ke saath). -->
+      <label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-weight:600;font-size:14px"><input type="checkbox" id="showDeletedOrders"> Deleted orders dikhayein</label>
     </div>
     <p class="msg" id="ordersMsg"></p>
     <div style="margin-bottom:12px"><button class="btn small ghost" id="exportOrdersBtn" type="button">⬇ Orders CSV Export karein</button></div>
     <div id="ordersWrap"><p class="empty-note">Loading…</p></div>
+    <div id="ordersPager"></div>
   </div>
 
   <!-- PRODUCTS -->
@@ -391,12 +404,13 @@
       <span id="prodCount" style="align-self:center;color:var(--muted);font-size:13.5px;font-weight:600"></span>
     </div>
     <div id="productsWrap"></div>
+    <div id="productsPager"></div>
   </div>
 
   <!-- CATEGORIES -->
   <div class="card hidden" id="categoriesPanel">
     <h3 style="margin-bottom:6px">Categories</h3>
-    <p style="color:var(--muted);font-size:14px;margin-bottom:14px">Categories store ke nav, tiles aur footer mein nazar aati hain. <strong>Visible off</strong> karne se category wahan se gayab ho jati hai, lekin us ke products All Products mein rehte hain. Category delete karne se <strong>products delete NAHI hote</strong> — un par category ka text waisa hi rehta hai.</p>
+    <p style="color:var(--muted);font-size:14px;margin-bottom:14px">Categories store ke nav, tiles aur footer mein nazar aati hain. <strong>Visible off</strong> karne se category wahan se gayab ho jati hai, lekin us ke products All Products mein rehte hain. Category delete karne se <strong>products delete NAHI hote</strong> — un ki category "General" ho jati hai. Category rename karne se us ke saare products ki category bhi badal jati hai.</p>
     <div class="addform">
       <div><label>Nayi category ka naam</label><input id="catNewName" placeholder="e.g. Kitchen"></div>
       <div><label>Image URL (optional)</label><input id="catNewImage" placeholder="https://…"></div>
@@ -436,6 +450,8 @@
   <!-- STORE SETTINGS -->
   <div class="card hidden" id="settingsPanel">
     <h3 style="margin-bottom:6px">Store Settings</h3>
+    <!-- HQ-A-03: load fail par blocking banner — save mat karein. -->
+    <div id="settingsLoadBanner" hidden role="alert" aria-live="polite" style="background:#fee2e2;border:1.5px solid #ef4444;color:#991b1b;border-radius:10px;padding:12px 14px;font-weight:700;margin-bottom:14px">⚠️ Settings load nahi hui — save mat karein. Page reload karein; jab tak settings dobara load na hon, Save buttons band hain.</div>
     <p style="color:var(--muted);font-size:14px;margin-bottom:14px">Storefront ka naam, logo, announcement bar, hero slides, section on/off, promo banners, policies, About text aur WhatsApp button yahin se change karein. <strong>Save Settings</strong> ke baad store page reload karne par changes live nazar aayenge.</p>
 
     <div class="settings-full" style="margin-top:0">
@@ -531,7 +547,7 @@
       <label>SEO description (Google ke neeche wali line)</label><textarea id="setSeoDesc" rows="2" placeholder="e.g. Kapre, electronics aur grocery — Cash on Delivery, 3–5 din mein delivery."></textarea>
     </div>
 
-    <div class="settings-box" style="margin-top:14px">
+    <div class="settings-box" id="domainBox" style="margin-top:14px">
       <h4>🌐 Apna Domain Connect Karein</h4>
       <p class="hint" id="domCurrent">Domain load ho raha hai…</p>
       <label>Apna domain likhein (e.g. shop.meridukaan.com — https:// ya / nahi)</label><input id="domInput" placeholder="shop.example.com">
@@ -547,6 +563,8 @@
         <strong>Abhi hosting GitHub Pages par hai — custom domain tab live hoga jab Phase 2 (Cloudflare) complete hoga; tab tak domain 'pending' rahega.</strong>
       </div>
     </div>
+    <!-- HQ-A-14: staff ko domain section ki jagah ye note dikhta hai. -->
+    <p id="domainStaffNote" hidden style="color:var(--muted);font-size:14px;margin-top:14px">Domain sirf owner/admin ke liye hai.</p>
 
     <button class="btn js-save" id="saveSettingsBtn" style="margin-top:16px">💾 Save Settings</button>
         <p class="msg" id="settingsMsg"></p>
@@ -925,9 +943,14 @@
 
 <div id="toastWrap" aria-live="polite"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- M-3: supabase-js pinned 2.119.0 + SRI. FE-P4: CDN fail ho to local copy
+     (js/supabase.min.js, wahi 2.119.0 file, 220,148 B) synchronously load hoti hai. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.min.js" integrity="sha384-gnyZit14c5lnGcarmA166QQjjJXpucw25ogZXuwH3HxxY904zHkBqmxVpelsPorb" crossorigin="anonymous"></script>
+<script>if(!window.supabase){document.write('<script src="js/supabase.min.js"><\/script>');}</script>
 <script src="themes.js"></script>
 <script src="themes-v4.js"></script>
+<!-- FE-P4: CDN + local copy dono fail hon to user-visible error (p-x7k94f.js tab bhi load nahi hoga). -->
+<script>if(!window.supabase){var d=document.createElement("div");d.setAttribute("role","alert");d.style.cssText="background:#fee2e2;border:2px solid #ef4444;color:#991b1b;border-radius:10px;padding:14px;margin:16px;font-weight:700";d.textContent="Supabase library load nahi hui (CDN aur local copy dono fail) — page reload karein ya internet check karein.";document.body.appendChild(d);}</script>
   <script src="p-x7k94f.js"></script>
 </body>
 </html>
