@@ -2046,7 +2046,19 @@ $("#searchToggle").onclick = () => {
    lagayen (resize + settings apply par dobara). */
 function syncHeaderOffset(){
   const h = $("#siteHeader") || document.querySelector(".site-header");
-  if (!h) return; /* V3.6: Playful Pop ka header sticky NAHI hai (FunBug ki tarah upar scroll ho jata hai), is liye body par header jitni padding nahi chahiye. */ document.body.style.paddingTop = (document.body.classList.contains("theme-playful") || document.body.classList.contains("theme-luxury")) ? "0px" : h.offsetHeight + "px";
+  if (!h) return;
+  /* STAGING banner offset (2026-11-10): the staging banner is a static div at
+     the top of <body> (staging only; production mein banner hota hi nahi).
+     Header position:fixed (most themes) ya position:absolute (Luxury) hai,
+     dono top:0 par chipke hote hain, is liye banner se overlap ho jata tha.
+     Header ko banner ki measured height se neeche dhakelen (bh=0 ho to kuch
+     nahi badalta — production be-asar), aur body padding mein bhi banner ki
+     height shamil karein. Resize par dobara measure hota hai (banner wrap). */
+  const b = document.querySelector(".staging-banner");
+  const bh = b ? b.offsetHeight : 0;
+  h.style.top = bh ? bh + "px" : "";
+  /* V3.6: Playful Pop ka header sticky NAHI hai (FunBug ki tarah upar scroll ho jata hai), is liye body par header jitni padding nahi chahiye. */
+  document.body.style.paddingTop = (document.body.classList.contains("theme-playful") || document.body.classList.contains("theme-luxury")) ? "0px" : (h.offsetHeight + bh) + "px";
 }
 window.addEventListener("resize", syncHeaderOffset);
 $("#searchBtn").onclick = () => { showPage("homeView"); renderGrid(); requestAnimationFrame(() => scrollToId("shop")); };
