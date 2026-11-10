@@ -1048,8 +1048,9 @@ function currentList(){
   return list;
 }
 /* FE-P1: storefront grid cap — admin ka secTotal ho to wohi, warna default 50
-   + "Load More" (har click +50). Server-side LIMIT/OFFSET prepared migration
-   hai (doosra agent) — jab tak woh nahi aata, ye client-side cap hai. */
+   + "Load More" (har click +50). SIRF client-side cap hai: server-side
+   LIMIT/OFFSET abhi bana hi nahi (migration 21 — owner approval ke baad),
+   is liye poora catalogue har boot par aata hai aur yahan kaata jata hai. */
 let gridShown = 50;
 function renderGrid(){
   const _allList = currentList(); const _cap = secTotal("all_products", 0);
@@ -2307,12 +2308,46 @@ async function resolveStore(){
   STORE_ID = row.id || null;
   return "ok";
 }
-function showStoreNotice(title, msg){
+/* Module 4: notice actions — Retry + Platform-home link. showStoreError
+   (lookup fail) aur suspended notice dono mein Retry ka matlab hai (store
+   dobara resolve hota hai); notfound par Retry bekaar hai (galat slug URL
+   mein phir se aayega), is liye wahan sirf Platform-home link hota hai. */
+function storeNoticeActions(withRetry){
+  const box = $("#storeNotice");
+  if (!box) return;
+  let actions = $("#storeNoticeActions");
+  if (!actions){
+    actions = document.createElement("div");
+    actions.id = "storeNoticeActions";
+    actions.className = "store-notice-actions";
+    actions.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap";
+    const card = box.querySelector(".store-notice-card");
+    if (card) card.appendChild(actions);
+  }
+  actions.innerHTML = "";
+  if (withRetry){
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.id = "storeRetryBtn";
+    retryBtn.className = "btn primary";
+    retryBtn.textContent = "Dobara try karein";
+    retryBtn.onclick = function(){ retryBoot(); };
+    actions.appendChild(retryBtn);
+  }
+  const homeLink = document.createElement("a");
+  homeLink.id = "storeHomeLink";
+  homeLink.className = "btn outline";
+  homeLink.href = "https://imalirazamansha.github.io/webalibabamarketingpro/shopnest.html";
+  homeLink.textContent = "Platform home";
+  actions.appendChild(homeLink);
+}
+function showStoreNotice(title, msg, withRetry){
   document.body.classList.add("store-closed");
   const box = $("#storeNotice");
   if (box){
     $("#noticeTitle").textContent = title;
     $("#noticeText").textContent = msg;
+    storeNoticeActions(!!withRetry);
     box.hidden = false;
   }
   document.title = title;
@@ -2324,29 +2359,7 @@ function showStoreError(){
   if (box){
     $("#noticeTitle").textContent = "Store load nahi ho saka";
     $("#noticeText").textContent = "Store load nahi ho saka — internet check karke dobara try karein.";
-    let actions = $("#storeNoticeActions");
-    if (!actions){
-      actions = document.createElement("div");
-      actions.id = "storeNoticeActions";
-      actions.className = "store-notice-actions";
-      actions.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap";
-      const card = box.querySelector(".store-notice-card");
-      if (card) card.appendChild(actions);
-    }
-    actions.innerHTML = "";
-    const retryBtn = document.createElement("button");
-    retryBtn.type = "button";
-    retryBtn.id = "storeRetryBtn";
-    retryBtn.className = "btn primary";
-    retryBtn.textContent = "Dobara try karein";
-    retryBtn.onclick = function(){ retryBoot(); };
-    const homeLink = document.createElement("a");
-    homeLink.id = "storeHomeLink";
-    homeLink.className = "btn outline";
-    homeLink.href = "https://imalirazamansha.github.io/webalibabamarketingpro/shopnest.html";
-    homeLink.textContent = "Platform home";
-    actions.appendChild(retryBtn);
-    actions.appendChild(homeLink);
+    storeNoticeActions(true);
     box.hidden = false;
   }
   document.title = "Store load nahi ho saka";
@@ -2367,11 +2380,11 @@ async function retryBoot(){
 async function boot(){
   const mode = await resolveStore();
   if (mode === "suspended"){
-    showStoreNotice("Store band hai", "Ye store filhal band hai — jald wapis aayega.");
+    showStoreNotice("Store band hai", "Ye store filhal band hai — jald wapis aayega.", true);
     return;
   }
   if (mode === "notfound"){
-    showStoreNotice("Store nahi mila", "Ye store nahi mila — link check karke dobara try karein.");
+    showStoreNotice("Store nahi mila", "Ye store nahi mila — link check karke dobara try karein.", false);
     return;
   }
   if (mode === "fallback"){

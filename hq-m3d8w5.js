@@ -30,6 +30,7 @@ let MY_EMAIL = null;
 let STORES = [];
 let STORE_SETTINGS = {};   // store_id -> settings.data (theme/font dot + edit panel ke liye)
 let accessCheckedFor = null;
+let hqRefreshArmed = false; /* HQ stats refresh (L8): boot ke baad true — tab wapas aane par stats refresh chalega. */
 
 /* Appearance options — p-x7k94f.js ke FONTS/THEME_SWATCHES se match.
    font_family settings mein OBJECT hota hai: { name, stack, google }. */
@@ -361,10 +362,21 @@ function showDash(){
   loadAll();
 }
 $("#refreshBtn").onclick = loadAll;
+/* HQ stats refresh lag (L8): admin ko J3 fix (visibilitychange → refresh)
+   mila tha, HQ ko nahi — loadPlatformStats() sirf boot par chalta tha, is
+   liye tab par wapas aane par numbers purane dikhte thay. Sirf STATS refresh
+   karte hain (loadAll nahi): loadStores() → renderStores() khula hua store
+   edit panel (data-editpanel inputs) mita deta — stats sirf text nodes hain.
+   Store count (#psStores) STORES cache se aata hai; doosri session se store
+   badle to ↻ Refresh dabayein. */
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && hqRefreshArmed) loadPlatformStats();
+});
 
 async function loadAll(){
   await loadStores();
   loadPlatformStats();
+  hqRefreshArmed = true; /* boot ho gaya — ab tab wapas aane par stats refresh chalega. */
 }
 
 /* ---------- Platform stats (FE-P2) ----------
