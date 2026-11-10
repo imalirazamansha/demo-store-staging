@@ -6,8 +6,8 @@
    Har query/mutation CURRENT store_id se scoped hai.
    Per-store roles: owner = sab kuch, admin = Team ke ilawa sab,
    staff = sirf Dashboard / Orders / Products. */
-const SUPABASE_URL = "https://vyiwiqcbituttdjgsuwe.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ5aXdpcWNiaXR1dHRkamdzdXdlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI1MTQ0MTYsImV4cCI6MjEwODA5MDQxNn0.fQDW8_b27GzTpu5XBi_Nqw12mmJlJodE0yB3Ei1KLNo";
+const SUPABASE_URL = "https://wpostzpztqaxgrbiwznv.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_EGF7f1S6M2nbLFYN22SvhQ_3DcyFfnt";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const $ = s => document.querySelector(s);
@@ -1091,88 +1091,6 @@ async function deleteProductAndImages(id){
   if (sErr) return { images: 0, storageWarn: true };
   return { images: paths.length };
 }
-/* ---------- Replace-orphan cleanup (L-19) ---------- */
-/* Purani image URL(s) Storage se delete karein — SIRF jab wo kisi aur product
-   (img/gallery) ya category (image) mein lagi na hon (shared-image guard —
-   template copy D-6 shared references mehfooz rehti hain) aur nayi URL(s)
-   mein shaamil na hon. Sirf is store ki apni "<STORE_ID>/..." paths chhooti
-   hain (ownStoragePath); external URLs (Unsplash waghera), doosre store ki
-   paths aur legacy be-prefix paths kabhi delete nahi hoti. Guard sirf
-   products/categories nahi — settings (hero/luxury/blog/reels/logo) bhi
-   parhta hai, aur guard read ke fail hone par kuch delete nahi karta
-   (fail-closed — query error par data null aata hai, use ignore karna
-   fail-open hota).
-   Sirf successful DB save ke BAAD call karein — save fail ho to purani image
-   barkarar rehti hai. Storage fail non-fatal hai ({ removed: 0, failed: true })
-   — product/category save phir bhi kamyab rehta hai. deleteProductAndImages
-   ko jaan-boojh kar nahi chheera (wo proven-working delete path hai); ye
-   helper usi guard logic ko replace path ke liye dobara likhta hai. */
-/* Storage path sirf is store ki apni (current-format) object ka hona chahiye:
-   "<STORE_ID>/..." se shuru ho, ".." ya backslash na ho, aur "?" / "#" ke baad
-   kuch na ho. Doosre store ka path, legacy be-ghair-prefix path
-   ("products/15/..." — Module 2 se pehle ke uploads) ya traversal jaisa path
-   kabhi delete nahi hota (legacy objects orphan hi rehte hain — un ki cleanup
-   alag owner-approved plan se hoti hai). */
-function ownStoragePath(url){
-  const s = String(url || "");
-  const i = s.indexOf("/product-images/");
-  if (i < 0) return null;
-  const p = s.slice(i + "/product-images/".length).split("?")[0].split("#")[0];
-  if (!p || !STORE_ID || !p.startsWith(STORE_ID + "/")) return null;
-  if (p.split("/").includes("..") || p.includes("\\")) return null;
-  return p;
-}
-/* Abhi-abhi upload hui (is liye kahin reference nahi ho sakti) URL(s) ko
-   best-effort delete karein — failed save par nayi upload orphan na rahe.
-   Kabhi throw nahi karta; sirf apni-store paths chhooti hain. */
-async function removeOwnStorageUrls(urls){
-  try {
-    const paths = [...new Set((urls || []).map(ownStoragePath).filter(Boolean))];
-    if (!paths.length) return 0;
-    const { error } = await sb.storage.from("product-images").remove(paths);
-    return error ? 0 : paths.length;
-  } catch (e) { return 0; }
-}
-async function removeUnsharedStorageUrls(urls, keepUrls){
-  const own = [];
-  for (const u of (urls || [])){
-    const s = String(u || "");
-    const path = ownStoragePath(s);
-    if (path) own.push({ url: s, path });
-  }
-  if (!own.length) return { removed: 0, failed: false };
-  const keep = new Set((keepUrls || []).map(String));
-  const drop = own.filter(o => !keep.has(o.url));
-  if (!drop.length) return { removed: 0, failed: false };
-  let refs = [];
-  try {
-    const { data: prods, error: pErr } = await sb.from("products").select("id,img,gallery");
-    const { data: cats, error: cErr } = await sb.from("categories").select("image");
-    const { data: settings, error: sErr } = await sb.from("settings").select("data");
-    /* supabase-js query fail par throw NAHI karta — { data: null, error } deta
-       hai. Error ko ignore karna fail-OPEN hota (refs khaali → sab delete);
-       is liye kisi bhi guard read ke fail hone par kuch delete na karein. */
-    if (pErr || cErr || sErr || !Array.isArray(prods) || !Array.isArray(cats) || !Array.isArray(settings)) return { removed: 0, failed: true };
-    refs = [...prods.flatMap(x => [x.img, ...(Array.isArray(x.gallery) ? x.gallery : [])]),
-            ...cats.map(c => c.image)];
-    /* Settings-held references bhi guard karein: hero slides, luxury tiles /
-       banners, collection pages, blog, reels poster/avatar aur logo — sab
-       isi bucket ki URLs hain, aur template copy (HQ) inhein doosri store ki
-       settings mein bhi copy kar deta hai. In mein lagi URL delete hui to
-       hero/banner khaali ho jata hai. */
-    const collect = (v) => {
-      if (typeof v === "string"){ if (v.indexOf("/product-images/") >= 0) refs.push(v); }
-      else if (Array.isArray(v)){ v.forEach(collect); }
-      else if (v && typeof v === "object"){ Object.values(v).forEach(collect); }
-    };
-    settings.forEach(row => collect(row && row.data));
-  } catch (e) { /* refs na milen to delete na karein — mehfooz rahein */ return { removed: 0, failed: true }; }
-  const paths = [...new Set(drop.filter(o => !refs.includes(o.url)).map(o => o.path))];
-  if (!paths.length) return { removed: 0, failed: false };
-  const { error } = await sb.storage.from("product-images").remove(paths);
-  if (error) return { removed: 0, failed: true };
-  return { removed: paths.length, failed: false };
-}
 /* FE-P1: products pager (50/page) — #productsPager div mein. */
 function renderProductsPager(total){
   const el = $("#productsPager");
@@ -1278,7 +1196,7 @@ function renderProductsList(){
       const { error } = await sb.from("products").update(patch).eq("id", id).eq("store_id", STORE_ID);
       if (error) fail++; else ok++;
     }
-    await loadProducts(); /* J2: bulk edit ke baad list fresh ho — await karein, warna toast pehle aur list baad mein update hoti hai. */
+    loadProducts();
     if (fail) showToast(`${ok} products update huin, ${fail} fail huin.`, (fail && !ok) ? "err" : "info");
     else showToast(`✅ ${ok} products update ho gayin (${label}).`, "ok");
   };
@@ -1520,34 +1438,28 @@ function bindProdCards(wrap){
     }
     updateDiscountWarn(card); /* F-17: warning hai, block nahi. */
     let imageUrl = get("img").trim();
-    /* L-19: replace se pehle purani image set capture karein (main + gallery) —
-       save kamyab hone par in mein se jo nayi set mein nahi hain, wo Storage
-       se delete hongi (removeUnsharedStorageUrls — shared guard ke saath). */
-    const oldImgUrls = [get("img").trim(), ...Array.from(card.querySelectorAll('[data-gallery-wrap] input')).map(el => el.value.trim()).filter(Boolean)];
     const oldLabel = b.textContent;
     b.disabled = true; b.textContent = files.length ? "Uploading…" : "Saving…";
-    /* Is save mein upload hui URLs — save fail ho to ye kahin reference nahi
-       hoti, is liye wapas delete kar ke orphan hone se bachate hain. */
-    let uploadedUrls = [];
     if (files.length){
       try {
         const take = files.slice(0, 10);
         setUploadMsg(msg, take.length + " image" + (take.length > 1 ? "s" : "") + " upload ho rahi " + (take.length > 1 ? "hain" : "hai") + "…");
         let totalBefore = 0, totalAfter = 0;
+        const urls = [];
         for (const f of take){
           totalBefore += f.size;
-          uploadedUrls.push(await uploadImage(f, `products/${b.dataset.save}`));
+          urls.push(await uploadImage(f, `products/${b.dataset.save}`));
           if (LAST_UPLOAD_INFO) totalAfter += LAST_UPLOAD_INFO.after;
         }
         if (take.length === 1){
-        imageUrl = uploadedUrls[0];
+        imageUrl = urls[0];
         card.querySelector('[data-f="img"]').value = imageUrl;
         card.querySelector("[data-preview]").src = imageUrl;
         } else {
-          writeImgOrder(card, uploadedUrls);
-          imageUrl = uploadedUrls[0];
+          writeImgOrder(card, urls);
+          imageUrl = urls[0];
         }
-        let doneNote = `✅ ${uploadedUrls.length} image${uploadedUrls.length > 1 ? "s" : ""} upload complete — ab product save ho raha hai.`;
+        let doneNote = `✅ ${urls.length} image${urls.length > 1 ? "s" : ""} upload complete — ab product save ho raha hai.`;
                  if (totalAfter > 0 && totalAfter < totalBefore){
                               const pct = Math.round((1 - totalAfter / totalBefore) * 100);
                               doneNote += ` Compress hui: ${fmtSize(totalBefore)} → ${fmtSize(totalAfter)} (${pct}% chhoti).`;
@@ -1556,10 +1468,6 @@ function bindProdCards(wrap){
         if (files.length > 10) doneNote += " Sirf pehli 10 li gayin.";
         setUploadMsg(msg, doneNote, "ok");
       } catch (e) {
-        /* Upload aadhi hui (pehli file(s) chadh gayi, baad wali fail) to
-           chadhi hui URLs orphan na rahen — wapas delete karein. Purani
-           image ko kuch nahi hota (save hua hi nahi). */
-        await removeOwnStorageUrls(uploadedUrls);
         setUploadMsg(msg, "Upload fail: " + e.message, "err");
         showToast("Image upload fail — product save nahi kiya gaya: " + e.message, "err");
         b.disabled = false; b.textContent = oldLabel;
@@ -1585,29 +1493,14 @@ function bindProdCards(wrap){
     };
     const { error } = await sb.from("products").update(payload).eq("id", +b.dataset.save).eq("store_id", STORE_ID);
     if (error) {
-      /* DB save fail: purani image barkarar hai (delete nahi hui), aur is
-         save mein upload hui nayi image(s) bhi orphan na rahen — wapas
-         delete karein (best-effort; save ka fail hona hi asal natija hai). */
-      const cleaned = await removeOwnStorageUrls(uploadedUrls);
       setUploadMsg(msg, "Product save fail: " + error.message, "err");
-      showToast("Save fail: " + error.message + (cleaned ? " (Nayi upload hui image wapas delete kar di gayi.)" : ""), "err");
+      showToast("Save fail: " + error.message, "err");
       b.disabled = false; b.textContent = oldLabel;
     } else {
       fileInput.value = "";
       b.textContent = "✅ Saved!";
       await loadProducts(); loadCategories(); /* category "Products" count bhi fresh ho — products PEHLE await karein, warna count purane cache se banta hai (J2) */
-      /* L-19 replace-orphan fix: purani image(s) delete karein — sirf jab un
-         ki jagah nayi URL aayi ho; shared/external wali chhoot jayengi. */
-      let replaceNote = "";
-      try {
-        const newUrls = [payload.img, ...(Array.isArray(payload.gallery) ? payload.gallery : [])].filter(Boolean);
-        if (oldImgUrls.some(u => u && !newUrls.includes(u))){
-          const cl = await removeUnsharedStorageUrls(oldImgUrls, newUrls);
-          if (cl.removed) replaceNote = ` Purani ${cl.removed} image${cl.removed > 1 ? "s" : ""} Storage se delete ho gayi.`;
-          else if (cl.failed) replaceNote = " Purani image Storage se delete nahi ho saki (product save ho gaya).";
-        }
-      } catch (e) { replaceNote = " Purani image Storage se delete nahi ho saki (product save ho gaya)."; }
-      showToast((payload.active ? "✅ Product save ho gaya — store par live hai." : "✅ Product save ho gaya — hidden hai (store par nazar nahi aayega).") + replaceNote, "ok");
+      showToast(payload.active ? "✅ Product save ho gaya — store par live hai." : "✅ Product save ho gaya — hidden hai (store par nazar nahi aayega).", "ok");
     }
   });
   wrap.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
@@ -1656,7 +1549,7 @@ async function loadCategories(){
     const { error } = await sb.from("categories").update({ visible: cb.checked }).eq("id", id).eq("store_id", STORE_ID);
     const msg = $("#catMsg");
     if (error){ msg.textContent = "Visible update fail: " + error.message; msg.className = "msg err"; cb.checked = !cb.checked; showToast("Visible update fail: " + error.message, "err"); }
-    else { msg.textContent = cb.checked ? "✅ Category ab store par nazar aayegi." : "✅ Category store se hide ho gayi (products phir bhi All Products mein rahenge)."; msg.className = "msg ok"; showToast(cb.checked ? "✅ Category ab store par nazar aayegi." : "✅ Category store se hide ho gayi.", "ok"); await loadCategories(); }
+    else { msg.textContent = cb.checked ? "✅ Category ab store par nazar aayegi." : "✅ Category store se hide ho gayi (products phir bhi All Products mein rahenge)."; msg.className = "msg ok"; showToast(cb.checked ? "✅ Category ab store par nazar aayegi." : "✅ Category store se hide ho gayi.", "ok"); loadCategories(); }
   });
   wrap.querySelectorAll("[data-csave]").forEach(b => b.onclick = async () => {
     const tr = b.closest("tr");
@@ -1674,14 +1567,10 @@ async function loadCategories(){
       if (!confirm(`${affected} products is category mein hain — rename karne se un ka category bhi badal jayega?`)) return;
     }
     let image = tr.querySelector("[data-cimg]").value.trim();
-    /* L-19: category replace se pehle purani image capture karein. */
-    const oldCatImage = (CATEGORIES_CACHE.find(c => c.id === id) || {}).image || "";
     const file = tr.querySelector("[data-cfile]").files[0];
-    /* Is save mein upload hui image — save fail ho to orphan na rahe. */
-    let uploadedCatImage = "";
     const old = b.textContent; b.disabled = true; b.textContent = "Saving…";
     try {
-      if (file){ image = await uploadImage(file, "categories"); uploadedCatImage = image; }
+      if (file) image = await uploadImage(file, "categories");
       /* Naam badla ho to pehle atomic rename RPC (cascade samet) — is ke baghair
          image/sort save nahi karte, taa ke aadha save na ho. */
       let moved = 0;
@@ -1698,9 +1587,6 @@ async function loadCategories(){
       const { error } = await sb.from("categories").update({ image, sort: parseInt(tr.querySelector("[data-csort]").value) || 0 }).eq("id", id).eq("store_id", STORE_ID);
       if (error){
         if (renamed){
-          /* Rename ho gaya, image save fail: purani image mehfooz hai, aur
-             is save mein upload hui nayi image orphan na rahe — wapas delete. */
-          await removeOwnStorageUrls([uploadedCatImage]);
           $("#catMsg").textContent = `Category rename ho gayi (${moved} products updated), lekin image/sort save nahi hui: ` + error.message;
           $("#catMsg").className = "msg err";
           showToast("Category rename ho gayi, lekin image/sort save nahi hui: " + error.message, "err");
@@ -1713,23 +1599,8 @@ async function loadCategories(){
         $("#catMsg").textContent = "✅ Category save ho gayi."; $("#catMsg").className = "msg ok";
         showToast("✅ Category save ho gayi.", "ok");
       }
-      /* L-19 replace-orphan fix (category image): sirf jab image save kamyab
-         hua ho (!error) aur purani URL ki jagah nayi aayi ho. Rename ho gaya
-         magar image save fail hua to purani image mehfooz rehti hai. */
-      if (!error && oldCatImage && oldCatImage !== image){
-        try {
-          const cl = await removeUnsharedStorageUrls([oldCatImage], [image]);
-          if (cl.removed) showToast("✅ Purani category image Storage se delete ho gayi.", "ok");
-          else if (cl.failed) showToast("Purani category image Storage se delete nahi ho saki (category save ho gayi).", "info");
-        } catch (e) {}
-      }
       await loadProducts(); loadCategories(); /* rename ke baad products ka cat badla — pehle products fresh karein, phir categories (count usi cache se) (J2) */
-    } catch (e) {
-      /* Rename/upload/update fail: purani image barkarar hai; is save mein
-         upload hui nayi image orphan na rahe — wapas delete karein. */
-      await removeOwnStorageUrls([uploadedCatImage]);
-      showToast("Category save fail: " + e.message, "err");
-    }
+    } catch (e) { showToast("Category save fail: " + e.message, "err"); }
     b.disabled = false; b.textContent = old;
   });
   wrap.querySelectorAll("[data-cdel]").forEach(b => b.onclick = async () => {
@@ -1768,7 +1639,7 @@ $("#addCategoryBtn").onclick = async () => {
     $("#catNewName").value = ""; $("#catNewImage").value = ""; $("#catNewImageFile").value = "";
     msg.textContent = `✅ Category "${name}" add ho gayi.`; msg.className = "msg ok";
     showToast(`✅ Category "${name}" add ho gayi.`, "ok");
-    await loadCategories();
+    loadCategories();
   } catch (e) {
     msg.textContent = "Category add fail: " + e.message; msg.className = "msg err";
     showToast("Category add fail: " + e.message, "err");
@@ -1797,7 +1668,7 @@ async function loadCoupons(){
   wrap.querySelectorAll("[data-cpn-del]").forEach(b => b.onclick = async () => {
     if (!confirm("Yeh coupon delete kar dein?")) return;
     const { error } = await sb.from("coupons").delete().eq("id", +b.dataset.cpnDel).eq("store_id", STORE_ID);
-    if (error) showToast("Delete fail: " + error.message, "err"); else { await loadCoupons(); showToast("✅ Coupon delete ho gaya.", "ok"); }
+    if (error) showToast("Delete fail: " + error.message, "err"); else { loadCoupons(); showToast("✅ Coupon delete ho gaya.", "ok"); }
   });
 }
 $("#addCouponBtn").onclick = async () => {
@@ -1811,7 +1682,7 @@ $("#addCouponBtn").onclick = async () => {
   $("#cpnCode").value = ""; $("#cpnPct").value = "";
   msg.textContent = `✅ Coupon ${code} (${pct}% OFF) ban gaya.`; msg.className = "msg ok";
   showToast(`✅ Coupon ${code} (${pct}% OFF) ban gaya.`, "ok");
-  await loadCoupons();
+  loadCoupons();
 };
 
 /* ---------- Team (owner only) ---------- */
@@ -1833,13 +1704,13 @@ async function loadTeam(){
     </tr>`; }).join("")}</tbody></table>`;
   wrap.querySelectorAll("[data-trole]").forEach(sel => sel.onchange = async () => {
     const { error } = await sb.from("team").update({ role: sel.value }).eq("store_id", STORE_ID).eq("email", sel.dataset.trole);
-    if (error){ showToast("Role update fail: " + error.message, "err"); await loadTeam(); }
+    if (error){ showToast("Role update fail: " + error.message, "err"); loadTeam(); }
     else { $("#teamMsg").textContent = "✅ Role update ho gaya."; $("#teamMsg").className = "msg ok"; showToast("✅ Role update ho gaya.", "ok"); }
   });
   wrap.querySelectorAll("[data-tdel]").forEach(b => b.onclick = async () => {
     if (!confirm(`${b.dataset.tdel} ko team se remove kar dein? Unka dashboard access foran band ho jayega.`)) return;
     const { error } = await sb.from("team").delete().eq("store_id", STORE_ID).eq("email", b.dataset.tdel);
-    if (error) showToast("Remove fail: " + error.message, "err"); else { await loadTeam(); showToast("✅ Member team se remove ho gaya.", "ok"); }
+    if (error) showToast("Remove fail: " + error.message, "err"); else { loadTeam(); showToast("✅ Member team se remove ho gaya.", "ok"); }
   });
 }
 $("#addTeamBtn").onclick = async () => {
@@ -1852,7 +1723,7 @@ $("#addTeamBtn").onclick = async () => {
   $("#teamEmail").value = "";
   msg.textContent = `✅ ${email} team mein add ho gaya (${role}). Woh magic link se login kar sakte hain — agar link na aaye to pehle Supabase Auth mein unka user banana hoga.`; msg.className = "msg ok";
   showToast(`✅ ${email} team mein add ho gaya (${role}).`, "ok");
-  await loadTeam();
+  loadTeam();
 };
 
 /* ---------- Dashboard / Analytics ---------- */
@@ -3449,34 +3320,11 @@ async function persistAllSettings(){
       updateLogoPreview(appLogo);
       setUploadMsg($("#appLogoMsg"), "✅ Logo upload complete.", "ok");
     }
-    /* Logo-clear fix: do fields (#appLogoUrl + #profLogo) aik hi logo hain —
-       purana `appLogo || profLogo` kisi aik field ko khaali karne par doosre
-       field ki purani value se logo wapas la deta tha, aur `if (data.logo_url)`
-       sync-back khaali karne par profile ko dobara bhar deta tha — is liye
-       logo kabhi clear nahi hota tha (Module 2 §2.1 #10: dono saves se ignore).
-       Ab: jis field ki value load-time value se badli ho, woh jeet-ti hai
-       (khaali karna bhi jeet-ta hai); dono na badlein to purana logo rehta
-       hai. Jeetne wali value dono keys mein aik saath likhte hain, kyunke
-       storefront `logo_url || profile.logo_url` parhta hai (script.js:519) —
-       sirf aik saaf karne se header logo rehta. Dono na badlein to dono keys
-       aur dono DOM fields stored values par hi rehte hain — warna aik
-       divergent stored pair (logo_url != profile.logo_url, legacy data mein
-       mumkin) har ghair-mutalliq save par chup-chap aik value mein collapse
-       ho jata. DOM fields bhi sync karte hain, warna agla save purani DOM
-       value se logo wapas la dega. */
-    const prevAppLogo = (SETTINGS_STATE && (SETTINGS_STATE.logo_url || (SETTINGS_STATE.profile && SETTINGS_STATE.profile.logo_url))) || "";
-    const prevProfLogo = (SETTINGS_STATE && SETTINGS_STATE.profile && SETTINGS_STATE.profile.logo_url) || "";
-    let newLogo = prevAppLogo;
-    let logoChanged = false;
-    if (appLogo !== prevAppLogo){ newLogo = appLogo; logoChanged = true; }
-    else if (profLogo !== prevProfLogo){ newLogo = profLogo; logoChanged = true; }
-    if (logoChanged){
-      data.logo_url = newLogo;
-      data.profile.logo_url = newLogo;
-      if ($("#appLogoUrl").value !== newLogo) $("#appLogoUrl").value = newLogo;
-      if ($("#profLogo").value !== newLogo) $("#profLogo").value = newLogo;
+    data.logo_url = appLogo || profLogo;
+    if (data.logo_url){
+      data.profile.logo_url = data.logo_url;
+      if ($("#profLogo").value.trim() !== data.logo_url) $("#profLogo").value = data.logo_url;
     }
-    updateLogoPreview(newLogo);
     data.font_family = fontObjFromName($("#appFont").value);
     /* V3 theme: sirf known key save ho, warna khaali (general fallback) */
     data.theme = (window.SHOPNEST_THEME_KNOWN && window.SHOPNEST_THEME_KNOWN(ADMIN_THEME_SELECTED)) ? ADMIN_THEME_SELECTED : "";
@@ -3830,12 +3678,6 @@ Object.entries(TAB_VIEWS).forEach(([view, [tabId]]) => {
    categories/dashboard (jo usi cache se count hoti hain). */
 async function refreshCurrentTab(){
   if (!tabRefreshArmed) return;
-  /* Stale inline message saaf karein — dobara load hone wala data purane
-     message se match nahi karta (L10: "✅ Order #232 update ho gaya" tab
-     switch ke baad bhi dikhta rehta tha). Sirf tab-switch / tab-wapsi par,
-     save flow se NAHI (wahan message load ke BAAD set hota hai). */
-  if (CURRENT_TAB === "orders" || CURRENT_TAB === "dashboard"){ const m = $("#ordersMsg"); if (m){ m.textContent = ""; m.className = "msg"; } }
-  else if (CURRENT_TAB === "categories"){ const m = $("#catMsg"); if (m){ m.textContent = ""; m.className = "msg"; } }
   if (CURRENT_TAB === "orders"){ await loadOrders(); loadDashboard(); }
   else if (CURRENT_TAB === "categories"){ await loadProducts(); loadCategories(); }
   else if (CURRENT_TAB === "dashboard"){ await loadOrders(); loadDashboard(); }

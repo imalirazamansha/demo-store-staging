@@ -1,8 +1,8 @@
 /* ================= CONFIG =================
    Supabase project keys — admin dashboard isi database se chalta hai.
    (anon key public hoti hai; asal security database policies (RLS) se hai.) */
-const SUPABASE_URL = "https://vyiwiqcbituttdjgsuwe.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ5aXdpcWNiaXR1dHRkamdzdXdlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI1MTQ0MTYsImV4cCI6MjEwODA5MDQxNn0.fQDW8_b27GzTpu5XBi_Nqw12mmJlJodE0yB3Ei1KLNo";
+const SUPABASE_URL = "https://wpostzpztqaxgrbiwznv.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_EGF7f1S6M2nbLFYN22SvhQ_3DcyFfnt";
 
 /* FE-P4: agar supabase-js CDN aur local copy dono fail ho jayein to script.js
    yahin ruk jaye aur #cdnError banner dikhaye (index.html ke end par hai) —
@@ -206,7 +206,7 @@ let SETTINGS = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
 const PLATFORM_HOSTS = ["localhost", "127.0.0.1", "imalirazamansha.github.io"];
 let STORE = null;
 let STORE_ID = null;
-let STORE_SLUG = "shopnest";
+let STORE_SLUG = "test-store-a";
 
 let PRODUCTS = [];
 let CATEGORIES = []; /* categories table ki rows (name/image/visible/sort); fail ho to [] = products se derive */
@@ -1048,9 +1048,8 @@ function currentList(){
   return list;
 }
 /* FE-P1: storefront grid cap — admin ka secTotal ho to wohi, warna default 50
-   + "Load More" (har click +50). SIRF client-side cap hai: server-side
-   LIMIT/OFFSET abhi bana hi nahi (migration 21 — owner approval ke baad),
-   is liye poora catalogue har boot par aata hai aur yahan kaata jata hai. */
+   + "Load More" (har click +50). Server-side LIMIT/OFFSET prepared migration
+   hai (doosra agent) — jab tak woh nahi aata, ye client-side cap hai. */
 let gridShown = 50;
 function renderGrid(){
   const _allList = currentList(); const _cap = secTotal("all_products", 0);
@@ -2226,7 +2225,7 @@ function startSocialProof(){
      2) sessionStorage 'sn_store_slug' (pehle visit se yaad)
      3) custom domain: hostname platform ke apne hosts se alag ho to
         storefront_stores mein custom_domain match
-     4) default 'shopnest'
+     4) default 'test-store-a'
    Stores lookup hi fail ho jaye to FAIL-CLOSED (Module 4): kuch load nahi
    hota, "Store load nahi ho saka" + Retry dikhta hai — kabhi baghair store
    filter ke purana render nahi hota. */
@@ -2274,7 +2273,7 @@ async function resolveStore(){
         } catch (e) { preRow = null; /* RPC fail — default/fallback neeche sambhal lega */ }
       }
     }
-    if (!slug) slug = "shopnest";
+    if (!slug) slug = "test-store-a";
   }
   STORE_SLUG = slug;
   /* F-19: custom-domain boot pehle hi resolve ho chuka ho to dobara RPC nahi. */
@@ -2290,11 +2289,11 @@ async function resolveStore(){
   }
   if (!row){
     if (explicit) return "notfound";
-    if (slug !== "shopnest"){
+    if (slug !== "test-store-a"){
       /* Session ka purana slug ab mojood nahi — saaf karke default try karein. */
       try { sessionStorage.removeItem("sn_store_slug"); } catch (e) {}
-      STORE_SLUG = "shopnest";
-      try { row = await fetchStorefrontRow("shopnest"); } catch (e) { row = null; }
+      STORE_SLUG = "test-store-a";
+      try { row = await fetchStorefrontRow("test-store-a"); } catch (e) { row = null; }
       if (!row){ STORE = null; STORE_ID = null; return "fallback"; }
     } else {
       /* View hai lekin default store bhi nahi — purana single-tenant render. */
@@ -2308,46 +2307,12 @@ async function resolveStore(){
   STORE_ID = row.id || null;
   return "ok";
 }
-/* Module 4: notice actions — Retry + Platform-home link. showStoreError
-   (lookup fail) aur suspended notice dono mein Retry ka matlab hai (store
-   dobara resolve hota hai); notfound par Retry bekaar hai (galat slug URL
-   mein phir se aayega), is liye wahan sirf Platform-home link hota hai. */
-function storeNoticeActions(withRetry){
-  const box = $("#storeNotice");
-  if (!box) return;
-  let actions = $("#storeNoticeActions");
-  if (!actions){
-    actions = document.createElement("div");
-    actions.id = "storeNoticeActions";
-    actions.className = "store-notice-actions";
-    actions.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap";
-    const card = box.querySelector(".store-notice-card");
-    if (card) card.appendChild(actions);
-  }
-  actions.innerHTML = "";
-  if (withRetry){
-    const retryBtn = document.createElement("button");
-    retryBtn.type = "button";
-    retryBtn.id = "storeRetryBtn";
-    retryBtn.className = "btn primary";
-    retryBtn.textContent = "Dobara try karein";
-    retryBtn.onclick = function(){ retryBoot(); };
-    actions.appendChild(retryBtn);
-  }
-  const homeLink = document.createElement("a");
-  homeLink.id = "storeHomeLink";
-  homeLink.className = "btn outline";
-  homeLink.href = "https://imalirazamansha.github.io/webalibabamarketingpro/shopnest.html";
-  homeLink.textContent = "Platform home";
-  actions.appendChild(homeLink);
-}
-function showStoreNotice(title, msg, withRetry){
+function showStoreNotice(title, msg){
   document.body.classList.add("store-closed");
   const box = $("#storeNotice");
   if (box){
     $("#noticeTitle").textContent = title;
     $("#noticeText").textContent = msg;
-    storeNoticeActions(!!withRetry);
     box.hidden = false;
   }
   document.title = title;
@@ -2359,7 +2324,29 @@ function showStoreError(){
   if (box){
     $("#noticeTitle").textContent = "Store load nahi ho saka";
     $("#noticeText").textContent = "Store load nahi ho saka — internet check karke dobara try karein.";
-    storeNoticeActions(true);
+    let actions = $("#storeNoticeActions");
+    if (!actions){
+      actions = document.createElement("div");
+      actions.id = "storeNoticeActions";
+      actions.className = "store-notice-actions";
+      actions.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:18px;flex-wrap:wrap";
+      const card = box.querySelector(".store-notice-card");
+      if (card) card.appendChild(actions);
+    }
+    actions.innerHTML = "";
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.id = "storeRetryBtn";
+    retryBtn.className = "btn primary";
+    retryBtn.textContent = "Dobara try karein";
+    retryBtn.onclick = function(){ retryBoot(); };
+    const homeLink = document.createElement("a");
+    homeLink.id = "storeHomeLink";
+    homeLink.className = "btn outline";
+    homeLink.href = "https://imalirazamansha.github.io/webalibabamarketingpro/shopnest.html";
+    homeLink.textContent = "Platform home";
+    actions.appendChild(retryBtn);
+    actions.appendChild(homeLink);
     box.hidden = false;
   }
   document.title = "Store load nahi ho saka";
@@ -2380,11 +2367,11 @@ async function retryBoot(){
 async function boot(){
   const mode = await resolveStore();
   if (mode === "suspended"){
-    showStoreNotice("Store band hai", "Ye store filhal band hai — jald wapis aayega.", true);
+    showStoreNotice("Store band hai", "Ye store filhal band hai — jald wapis aayega.");
     return;
   }
   if (mode === "notfound"){
-    showStoreNotice("Store nahi mila", "Ye store nahi mila — link check karke dobara try karein.", false);
+    showStoreNotice("Store nahi mila", "Ye store nahi mila — link check karke dobara try karein.");
     return;
   }
   if (mode === "fallback"){
