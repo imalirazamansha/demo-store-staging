@@ -1799,6 +1799,8 @@ async function idemVerifyOrder(storeId, key, total, lines){
 function m6CheckoutErrorMessage(code){
      switch (String(code || "")){
         case "INVALID_COUPON": return "Coupon valid nahi hai — dobara check karein ya coupon hata dein.";
+        case "COUPON_EXPIRED": return "Coupon ki expiry ho gayi hai — coupon hata kar dobara try karein.";
+        case "COUPON_LIMIT_REACHED": return "Coupon ki limit poori ho gayi hai — coupon hata kar dobara try karein.";
         case "INVALID_PRODUCT":
         case "INVALID_VARIANT": return "Kuch products ab available nahi hain — cart refresh karein.";
         case "INVALID_QTY": return "Quantity theek nahi hai — dobara check karein.";

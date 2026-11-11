@@ -258,7 +258,6 @@
 </style>
 </head>
 <body>
-<div class="staging-banner" style="position:static;background:#b91c1c;color:#fff;text-align:center;font-weight:700;font-size:14px;padding:8px 12px;letter-spacing:1px;">STAGING — TEST ONLY — NOT PRODUCTION — shopnest-staging</div>
 <noscript><p style="background:#fee2e2;color:#991b1b;font-weight:700;padding:14px;text-align:center">JavaScript on karein — Admin chalane ke liye JavaScript zaroori hai.</p></noscript>
 
 <div class="topbar">
@@ -463,6 +462,8 @@
     <div class="addform">
       <div><label>Coupon code</label><input id="cpnCode" placeholder="e.g. WELCOME10" style="text-transform:uppercase"></div>
       <div><label>Discount % (1–90)</label><input id="cpnPct" type="number" min="1" max="90" placeholder="10"></div>
+      <div><label>Expiry date (optional)</label><input id="cpnExpiry" type="date"></div>
+      <div><label>Max uses (optional)</label><input id="cpnMaxUses" type="number" min="1" placeholder="Unlimited"></div>
       <div><button class="btn" id="addCouponBtn" style="width:100%">＋ Add Coupon</button></div>
     </div>
     <p class="msg" id="couponsMsg"></p>

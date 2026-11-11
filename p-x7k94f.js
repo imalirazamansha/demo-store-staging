@@ -861,6 +861,15 @@ function openOrderEdit(id){
      server items se total dobara hisaab karega). */
   $("#oeTotal").value = o.total ?? 0;
   $("#oeMsg").textContent = ""; $("#oeMsg").className = "msg";
+  /* M24 (§2.9, same release): staff sirf status badal sakta hai — PII/details
+     inputs staff ke liye disabled. Server bhi rokta hai (staff payload mein
+     sirf p_order_id + p_status hota hai); UI mein bhi dikhna chahiye, warna
+     staff ki edit silently drop ho jati ("Koi change nahi"). */
+  const staffNoPii = effRole() === "staff";
+  ["#oeName", "#oePhone", "#oeCity", "#oeAddress", "#oeTrackNote"].forEach(sel => {
+    const el = $(sel);
+    if (el) el.disabled = staffNoPii;
+  });
   $("#orderEditModal").classList.remove("hidden");
 }
 function addOeItemRow(l = {}){
@@ -908,6 +917,15 @@ function oeRecalc(){
 $("#oeDiscount").addEventListener("input", oeRecalc);
 $("#oeAddItem").onclick = () => { addOeItemRow({}); oeRecalc(); };
 $("#oeCancelBtn").onclick = () => $("#orderEditModal").classList.add("hidden");
+/* M24 fallback helper: PostgREST returns 404 / code PGRST202 ("Could not
+   find the function ...") when an RPC does not exist (e.g. update_order_all
+   after an M24 rollback). Any other RPC error is a real failure, not a
+   missing function — sirf is case mein fallback chalta hai. */
+function isRpcFunctionNotFound(err){
+  if (!err) return false;
+  if (err.code === "PGRST202") return true;
+  return /could not find the function/i.test(String(err.message || ""));
+}
 $("#orderEditModal").addEventListener("click", e => { if (e.target.id === "orderEditModal") e.currentTarget.classList.add("hidden"); });
 $("#oeSaveBtn").onclick = async () => {
   if (OE_ID == null) return;
@@ -924,12 +942,14 @@ $("#oeSaveBtn").onclick = async () => {
   btn.disabled = true; btn.textContent = "Saving…";
   try {
     /* HQ-A-10: sirf BADLE hue hisse save karte hain (loaded order se diff).
-       NOTE — ab bhi koi transaction nahi: details + status + financials
-       teen alag RPCs hain, is liye beech mein fail ho to pehle wala hissa
-       save ho chuka hota hai (partial save). Asli fix ek hi transactional
-       `update_order_all` RPC hai (DEC-29) — wo server migration abhi tayyar
-       nahi, is liye ye diff sirf ghair-zaroori writes kam karta hai, partial
-       save ka khatra khatam nahi karta. */
+       M24 (same release, findings §2.9 + D-19): staff save ek hi atomic
+       `update_order_all` RPC se hota hai — payload mein sirf p_order_id +
+       p_status (status badla ho to); details/financials/reason staff kabhi
+       nahi bhejta. Owner/admin teen alag RPCs se save karte hain (neeche).
+       Agar `update_order_all` na mile (PostgREST 404 — e.g. M24 rollback
+       ke baad), to staff bhi teen purane RPCs par wapas chala jata hai
+       (neeche fallback) — teeno RPCs is liye barkarar hain. */
+    const isStaff = effRole() === "staff";
     const origMeta = OE_ORIG ? orderMeta(OE_ORIG) : { coupon: null, discount: 0 };
     const newDetails = {
       p_customer_name: customer_name,
@@ -938,12 +958,15 @@ $("#oeSaveBtn").onclick = async () => {
       p_address: $("#oeAddress").value.trim(),
       p_tracking_note: $("#oeTrackNote") ? $("#oeTrackNote").value.trim() : null
     };
-    const detailsChanged = !OE_ORIG
+    let detailsChanged = !OE_ORIG
       || newDetails.p_customer_name !== (OE_ORIG.customer_name || "")
       || newDetails.p_phone !== (OE_ORIG.phone || "")
       || newDetails.p_city !== (OE_ORIG.city || "")
       || newDetails.p_address !== (OE_ORIG.address || "")
       || (newDetails.p_tracking_note || "") !== (OE_ORIG.tracking_note || "");
+    /* M24 switch (§2.9): staff ke liye detailsChanged force false — staff
+       PII edit nahi kar sakta, is liye details payload mein nahi aati. */
+    if (isStaff) detailsChanged = false;
     const newStatus = $("#oeStatus").value;
     const statusChanged = !OE_ORIG || newStatus !== OE_ORIG.status;
     const finChanged = effRole() === "owner" && (!OE_ORIG
@@ -954,17 +977,33 @@ $("#oeSaveBtn").onclick = async () => {
       btn.disabled = false; btn.innerHTML = `<svg class="ic" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg> Order Save karein`;
       return;
     }
-    if (detailsChanged){
-      let r = await sb.rpc("update_order_details", { p_order_id: OE_ID, ...newDetails });
-      if (r.error) throw r.error;
+    /* M24 staff path: sirf status — atomic update_order_all. Agar function
+       nahi mila (PostgREST 404 / PGRST202 — M24 rollback ke baad), to
+       neeche teen purane RPCs par wapas chale jayen (FALLBACK, explicit). */
+    let savedViaAll = false;
+    if (isStaff && statusChanged){
+      const r = await sb.rpc("update_order_all", { p_order_id: OE_ID, p_status: newStatus });
+      if (r.error && isRpcFunctionNotFound(r.error)){
+        /* update_order_all absent — fall through to the three old RPCs. */
+      } else if (r.error){
+        throw r.error;
+      } else {
+        savedViaAll = true;
+      }
     }
-    if (statusChanged){
-      let r = await sb.rpc("update_order_status", { p_order_id: OE_ID, p_status: newStatus });
-      if (r.error) throw r.error;
-    }
-    if (finChanged){
-      let r = await sb.rpc("update_order_financials", { p_order_id: OE_ID, p_items: items, p_discount: c.disc });
-      if (r.error) throw r.error;
+    if (!savedViaAll){
+      if (detailsChanged){
+        let r = await sb.rpc("update_order_details", { p_order_id: OE_ID, ...newDetails });
+        if (r.error) throw r.error;
+      }
+      if (statusChanged){
+        let r = await sb.rpc("update_order_status", { p_order_id: OE_ID, p_status: newStatus });
+        if (r.error) throw r.error;
+      }
+      if (finChanged){
+        let r = await sb.rpc("update_order_financials", { p_order_id: OE_ID, p_items: items, p_discount: c.disc });
+        if (r.error) throw r.error;
+      }
     }
     $("#orderEditModal").classList.add("hidden");
     const om = $("#ordersMsg");
@@ -1677,8 +1716,8 @@ async function loadCategories(){
     const name = tr.querySelector("[data-cname]").value.trim();
     if (!name){ showToast("Category ka naam khaali nahi ho sakta.", "err"); return; }
     /* HQ-A-02 (DEC-10): rename products.cat ko bhi cascade karta hai — atomic RPC
-       rename_category (migration 18) se. RPC 'General' ka rename protect nahi karta,
-       is liye UI pehle se rokta hai. */
+       rename_category (migration 18) se. M27 se RPC khud 'General' ka rename
+       protect karta hai (server-side); UI bhi pehle se rokta hai (double safety). */
     const oldCat = (CATEGORIES_CACHE.find(c => c.id === id) || {}).name || "";
     const renamed = oldCat && oldCat !== name;
     if (renamed && oldCat === "General"){ showToast("General category ka naam nahi badal sakte.", "err"); return; }
@@ -1795,10 +1834,13 @@ async function loadCoupons(){
   if (error){ wrap.innerHTML = `<p class="empty-note">Coupons load nahi ho sakay (shopify migration run hai?): ${esc(error.message)}</p>`; return; }
   if (!data.length){ wrap.innerHTML = `<p class="empty-note">Abhi koi coupon nahi hai — upar wale form se pehla coupon banayein.</p>`; return; }
   wrap.innerHTML = `<table>
-    <thead><tr><th>Code</th><th>Discount</th><th>Active</th><th>Banaya gaya</th><th></th></tr></thead>
+    <thead><tr><th>Code</th><th>Discount</th><th>Expiry</th><th>Max uses</th><th>Uses</th><th>Active</th><th>Banaya gaya</th><th></th></tr></thead>
     <tbody>${data.map(c => `<tr>
       <td><strong>${esc(c.code)}</strong></td>
       <td>${c.pct}% OFF</td>
+      <td>${c.expires_at ? new Date(c.expires_at).toLocaleDateString("en-PK",{day:"numeric",month:"short",year:"numeric"}) : "—"}</td>
+      <td>${c.max_uses == null ? "∞" : c.max_uses}</td>
+      <td>${c.uses == null ? 0 : c.uses}</td>
       <td><input type="checkbox" data-cpn-active="${c.id}" ${c.active ? "checked" : ""} style="width:18px;height:18px"></td>
       <td><small style="color:var(--muted)">${new Date(c.created_at).toLocaleDateString("en-PK",{day:"numeric",month:"short",year:"numeric"})}</small></td>
       <td><button class="btn small danger" data-cpn-del="${c.id}">Delete</button></td>
@@ -1819,9 +1861,19 @@ $("#addCouponBtn").onclick = async () => {
   const msg = $("#couponsMsg");
   if (!code){ msg.textContent = "Coupon code likhein."; msg.className = "msg err"; return; }
   if (!pct){ msg.textContent = "Discount % 1–90 ke darmiyan likhein."; msg.className = "msg err"; return; }
-  const { error } = await sb.from("coupons").insert({ store_id: STORE_ID, code, pct, active: true });
+  /* M22: expiry + max-uses (columns exist only after the M22 ALTER TABLE).
+     Send them ONLY when set — PostgREST rejects unknown columns even when
+     null, so an unconditional insert would break coupon creation before M22
+     lands. Expiry is end-of-day (23:59:59) so the coupon stays valid through
+     its expiry date; empty = never expires / unlimited. */
+  const expRaw = $("#cpnExpiry").value;
+  const maxRaw = $("#cpnMaxUses").value.trim();
+  const payload = { store_id: STORE_ID, code, pct, active: true };
+  if (expRaw) payload.expires_at = new Date(expRaw + "T23:59:59").toISOString(); /* F-M22-2a: local end-of-day as UTC ISO — the DB is UTC, so an offset-less string would stay valid ~5h past the admin's local end-of-day. */
+  if (maxRaw !== "") payload.max_uses = Math.max(1, parseInt(maxRaw) || 0);
+  const { error } = await sb.from("coupons").insert(payload);
   if (error){ msg.textContent = "Coupon add fail: " + error.message; msg.className = "msg err"; showToast("Coupon add fail: " + error.message, "err"); return; }
-  $("#cpnCode").value = ""; $("#cpnPct").value = "";
+  $("#cpnCode").value = ""; $("#cpnPct").value = ""; $("#cpnExpiry").value = ""; $("#cpnMaxUses").value = "";
   msg.textContent = `✅ Coupon ${code} (${pct}% OFF) ban gaya.`; msg.className = "msg ok";
   showToast(`✅ Coupon ${code} (${pct}% OFF) ban gaya.`, "ok");
   await loadCoupons();
