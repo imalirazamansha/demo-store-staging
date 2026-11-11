@@ -346,6 +346,7 @@ function mfaHideAllViews(){
   ["#loginView", "#dashView", "#noAccessView", "#storePickerView"].forEach(s => $(s).classList.add("hidden"));
   $("#mfaView").classList.remove("hidden");
   $("#logoutBtn").classList.remove("hidden");
+  $("#addFactorBtn").classList.add("hidden");
 }
 /* MFA gate: AAL1 user ko challenge ya enrolment dikhayein. onDone MFA
    kamyab hone par chalta hai (access check dobara hota hai). */
@@ -375,6 +376,29 @@ async function mfaShowGate(){
     if (data.session) checkAccess(data.session);
   };
 }
+/* DR drill (A-5): dashboard se doosra factor add karne ke liye. MFA gate
+   sirf login par enrolment dikhata hai (0 factors hon to); AAL2 dashboard
+   mein "Add MFA factor" button se enrolment box kholte hain. */
+async function mfaShowAddFactor(){
+  mfaClearSecrets();
+  mfaHideAllViews();
+  $("#mfaChallengeBox").classList.add("hidden");
+  $("#mfaEnrollBox").classList.remove("hidden");
+  $("#mfaQrWrap").classList.add("hidden");
+  $("#mfaEnrollStartBtn").classList.remove("hidden");
+  $("#mfaEnrollMsg").textContent = "";
+  $("#mfaEnrollMsg").className = "msg";
+  $("#mfaChallengeMsg").textContent = "";
+  $("#mfaChallengeMsg").className = "msg";
+  $("#mfaIntro").innerHTML = "Doosra authenticator add kar rahe hain. <strong>Device 2</strong> par authenticator app se QR scan karein, phir 6-digit code dein. <br><small>Ye QR pehle wale factor se alag hai — dono devices par alag factor hoga.</small>";
+  mfaGateDone = async () => {
+    mfaClearSecrets();
+    accessCheckedFor = null;
+    const { data } = await sb.auth.getSession();
+    if (data.session) checkAccess(data.session);
+  };
+}
+$("#addFactorBtn").onclick = () => { mfaShowAddFactor(); };
 $("#mfaLogoutBtn").onclick = async () => { mfaClearSecrets(); await sb.auth.signOut(); location.reload(); };
 $("#mfaCopySecretBtn").onclick = async function(){
   const sec = $("#mfaSecretText").textContent || "";
@@ -498,6 +522,7 @@ function showStorePicker(){
   $("#mfaView").classList.add("hidden");
   $("#storePickerView").classList.remove("hidden");
   $("#logoutBtn").classList.remove("hidden");
+  $("#addFactorBtn").classList.remove("hidden");
   $("#pickerEmail").textContent = MY_EMAIL || "";
   $("#pickerList").innerHTML = MY_STORES.map(s => `<button class="btn ghost store-pick" data-pick="${esc(s.id)}"><span><svg class="ic" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> <strong>${esc(s.name)}</strong> <small>/${esc(s.slug)}${s.status === "suspended" ? " • ⏸ suspended" : ""}</small></span><span class="pill ${s.role ? "green" : ""}">${s.role ? esc(s.role) : "<svg class='ic' viewBox='0 0 24 24'><circle cx='12' cy='8' r='7'/><polyline points='8.21 13.89 7 23 12 20 17 23 15.79 13.88'/></svg> platform"}</span></button>`).join("");
   $("#pickerList").querySelectorAll("[data-pick]").forEach(b => b.onclick = () => {
@@ -534,6 +559,7 @@ function showDash(){
   $("#mfaView").classList.add("hidden");
   $("#dashView").classList.remove("hidden");
   $("#logoutBtn").classList.remove("hidden");
+  $("#addFactorBtn").classList.remove("hidden");
   /* Role gating (current store ki role par, Module 3b): staff ab Categories/Coupons/Settings/Homepage/Appearance/Style/Content istemal kar sakta hai (real store work); Team Owner/Admin ko; Meta sirf Owner/Admin. */
   $("#tabTeam").classList.toggle("hidden", !(effRole() === "owner" || effRole() === "admin"));
   const adminOnlyTabs = ["tabMeta"]; /* V5 Phase 5: Meta tab sirf Owner/Admin — staff ko token fields kabhi nahi. */
